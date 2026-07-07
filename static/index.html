@@ -1,0 +1,1395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agnes AI Studio - 图片 & 视频生成</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #232734;
+            --border: #2a2e3b;
+            --text: #e4e6ed;
+            --text2: #8b8fa8;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --success: #22c55e;
+            --error: #ef4444;
+            --warning: #f59e0b;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --transition: 0.2s ease;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* ===== Header ===== */
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo {
+            font-size: 22px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .api-key-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: var(--text2);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--error);
+        }
+        .status-dot.active { background: var(--success); }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--surface2);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover {
+            background: #2d3140;
+            border-color: #3d4258;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+        .btn-primary:hover {
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
+        }
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-success {
+            background: var(--success);
+            border-color: var(--success);
+            color: #fff;
+        }
+
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+        /* ===== Layout ===== */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 24px;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text2);
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all var(--transition);
+            background: none;
+            border-top: none;
+            border-left: none;
+            border-right: none;
+        }
+
+        .tab:hover { color: var(--text); }
+        .tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* ===== Cards ===== */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        .card-header {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-header .icon {
+            font-size: 20px;
+        }
+
+        /* ===== Form ===== */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text2);
+            margin-bottom: 6px;
+        }
+
+        .form-input, .form-textarea, .form-select {
+            width: 100%;
+            padding: 10px 14px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--surface2);
+            color: var(--text);
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color var(--transition);
+            resize: vertical;
+        }
+
+        .form-input:focus, .form-textarea:focus, .form-select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .form-textarea {
+            min-height: 100px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+        }
+
+        .form-hint {
+            font-size: 11px;
+            color: var(--text2);
+            margin-top: 4px;
+        }
+
+        /* ===== Result Area ===== */
+        .result-area {
+            margin-top: 20px;
+            display: none;
+        }
+        .result-area.show { display: block; }
+
+        .result-image {
+            max-width: 100%;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+        }
+
+        .result-video {
+            max-width: 100%;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+        }
+
+        .result-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        /* ===== Video Task List ===== */
+        .task-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .task-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: var(--surface2);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            gap: 12px;
+        }
+
+        .task-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .task-prompt {
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .task-time {
+            font-size: 11px;
+            color: var(--text2);
+            margin-top: 2px;
+        }
+
+        .task-status {
+            font-size: 12px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .status-queued { background: #1e293b; color: #94a3b8; }
+        .status-in_progress { background: #172554; color: #60a5fa; }
+        .status-completed { background: #14532d; color: #4ade80; }
+        .status-failed { background: #450a0a; color: #fca5a5; }
+
+        /* ===== Modal ===== */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            width: 90%;
+            max-width: 480px;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        /* ===== Toast ===== */
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 300;
+            padding: 12px 20px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            font-weight: 500;
+            animation: slideIn 0.3s ease;
+            display: none;
+        }
+        .toast.show { display: block; }
+        .toast-success { background: #14532d; color: #4ade80; border: 1px solid #166534; }
+        .toast-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+        .toast-info { background: #172554; color: #60a5fa; border: 1px solid #1e3a5f; }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* ===== Loading ===== */
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 250;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .loading-overlay.show { display: flex; }
+
+        .loading-text {
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        /* ===== Preset buttons ===== */
+        .presets {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        .preset-btn {
+            padding: 4px 10px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            background: var(--surface2);
+            color: var(--text2);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+        .preset-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* ===== Drop Zone ===== */
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 30px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all var(--transition);
+            background: var(--surface2);
+            position: relative;
+        }
+        .drop-zone:hover {
+            border-color: var(--accent);
+            background: #1e2132;
+        }
+        .drop-zone.drag-over {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.08);
+            border-style: solid;
+        }
+        .drop-zone.has-image {
+            border-color: var(--success);
+            border-style: solid;
+            padding: 0;
+            background: transparent;
+        }
+        .drop-zone-icon {
+            font-size: 36px;
+            margin-bottom: 8px;
+            opacity: 0.6;
+        }
+        .drop-zone-text {
+            font-size: 13px;
+            color: var(--text2);
+        }
+        .drop-zone-text strong {
+            color: var(--accent);
+        }
+        .drop-zone-hint {
+            font-size: 11px;
+            color: var(--text2);
+            margin-top: 6px;
+            opacity: 0.7;
+        }
+        .drop-zone-preview {
+            width: 100%;
+            max-height: 240px;
+            object-fit: contain;
+            border-radius: var(--radius);
+            display: block;
+        }
+        .drop-zone-remove {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(0,0,0,0.7);
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+        .drop-zone-remove:hover {
+            background: var(--error);
+        }
+        .drop-zone .upload-input {
+            display: none;
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            .container { padding: 12px; }
+            .form-row { grid-template-columns: 1fr 1fr; }
+            .header { padding: 0 12px; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <span class="logo">✦ Agnes AI Studio</span>
+        </div>
+        <div class="header-right">
+            <span class="api-key-status" id="apiKeyStatus">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">未配置 API Key</span>
+            </span>
+            <button class="btn btn-sm" onclick="openSettings()">⚙ 设置</button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="container">
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('image')">🖼 图片生成</button>
+            <button class="tab" onclick="switchTab('img2img')">🎨 图生图</button>
+            <button class="tab" onclick="switchTab('video')">🎬 视频生成</button>
+            <button class="tab" onclick="switchTab('videoTasks')">📋 视频任务</button>
+            <button class="tab" onclick="switchTab('localFiles')">📁 本地文件</button>
+        </div>
+
+        <!-- Tab: 图片生成 -->
+        <div class="tab-content active" id="tab-image">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">🖼</span> 文生图 (Text-to-Image)
+                </div>
+
+                <div class="presets" id="imagePresets">
+                    <button class="preset-btn" onclick="setImagePreset('一只可爱的橘猫在樱花树下晒太阳，温暖的阳光洒在它身上，画面温暖治愈，摄影风格')">🐱 橘猫樱花</button>
+                    <button class="preset-btn" onclick="setImagePreset('一座未来主义城市，高耸的玻璃建筑，飞行汽车在空中穿梭，赛博朋克风格，霓虹灯光，夜晚')">🏙 赛博都市</button>
+                    <button class="preset-btn" onclick="setImagePreset('一杯精致的咖啡放在木桌上，旁边有一本书，窗外是雨天的街道，温馨舒适的氛围，电影感')">☕ 咖啡时光</button>
+                    <button class="preset-btn" onclick="setImagePreset('梦幻般的森林仙境，萤火虫飞舞，古老的树木，柔和的光线透过树叶，奇幻风格，魔法氛围')">✨ 魔法森林</button>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">图片描述 (Prompt)</label>
+                    <textarea class="form-textarea" id="imagePrompt" placeholder="描述你想要生成的图片...&#10;支持中文描述"></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">模型</label>
+                        <select class="form-select" id="imageModel">
+                            <option value="agnes-image-2.1-flash">agnes-image-2.1-flash (文生图)</option>
+                            <option value="agnes-image-2.0-flash">agnes-image-2.0-flash</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">尺寸</label>
+                        <select class="form-select" id="imageSize">
+                            <option value="1024x1024">1024 × 1024 (正方形)</option>
+                            <option value="1024x768">1024 × 768 (横版)</option>
+                            <option value="768x1024">768 × 1024 (竖版)</option>
+                            <option value="1536x1024">1536 × 1024 (宽屏)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" id="btnGenerateImage" onclick="generateImage()">
+                    ✨ 生成图片
+                </button>
+
+                <div class="result-area" id="imageResult">
+                    <img class="result-image" id="imageResultImg" src="" alt="生成结果">
+                    <div class="result-actions">
+                        <button class="btn btn-sm" onclick="downloadImage()">📥 下载图片</button>
+                        <button class="btn btn-sm" onclick="copyImageUrl()">📋 复制URL</button>
+                        <span style="font-size:11px;color:var(--success);margin-left:8px;display:none;" id="imageLocalSaved">✅ 已保存到 pictures 文件夹</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: 图生图 -->
+        <div class="tab-content" id="tab-img2img">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">🎨</span> 图生图 (Image-to-Image)
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">参考图片</label>
+                    <div class="drop-zone" id="img2imgDropZone" onclick="document.getElementById('img2imgFileInput').click()">
+                        <div class="drop-zone-icon">🖼</div>
+                        <div class="drop-zone-text">拖拽图片到此处，或<strong>点击选择</strong></div>
+                        <div class="drop-zone-hint">支持 JPG / PNG / GIF / WebP</div>
+                        <input type="file" class="upload-input" id="img2imgFileInput" accept="image/*" onchange="handleDropZoneFile(this, 'img2img')">
+                    </div>
+                    <div class="form-hint" style="margin-top:8px;">或者直接输入图片 URL：</div>
+                    <input type="text" class="form-input" id="img2imgUrl" placeholder="输入参考图片的 URL 地址..." style="margin-top:4px;">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">编辑描述</label>
+                    <textarea class="form-textarea" id="img2imgPrompt" placeholder="描述你希望对参考图片做什么修改...&#10;例如：改成水彩画风格 / 将背景换为海边 / 变成卡通风格"></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">输出尺寸</label>
+                        <select class="form-select" id="img2imgSize">
+                            <option value="1024x768">1024 × 768</option>
+                            <option value="1024x1024">1024 × 1024</option>
+                            <option value="768x1024">768 × 1024</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" id="btnImg2Img" onclick="generateImg2Img()">
+                    🎨 开始编辑
+                </button>
+
+                <div class="result-area" id="img2imgResult">
+                    <img class="result-image" id="img2imgResultImg" src="" alt="编辑结果">
+                    <div class="result-actions">
+                        <button class="btn btn-sm" onclick="downloadImg2Img()">📥 下载图片</button>
+                        <button class="btn btn-sm" onclick="copyImg2ImgUrl()">📋 复制URL</button>
+                        <span style="font-size:11px;color:var(--success);margin-left:8px;display:none;" id="img2imgLocalSaved">✅ 已保存到 pictures 文件夹</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: 视频生成 -->
+        <div class="tab-content" id="tab-video">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">🎬</span> 视频生成 (Text-to-Video)
+                </div>
+
+                <div class="presets" id="videoPresets">
+                    <button class="preset-btn" onclick="setVideoPreset('A cinematic shot of a cat walking on the beach at sunset, golden hour lighting, waves gently rolling in, 4K quality')">🐱 猫咪海滩</button>
+                    <button class="preset-btn" onclick="setVideoPreset('A woman walking through a rainy Tokyo street at night, neon reflections on wet pavement, cinematic lighting')">🌃 东京雨夜</button>
+                    <button class="preset-btn" onclick="setVideoPreset('A drone shot flying over a misty mountain range at sunrise, clouds rolling over peaks, epic cinematic')">🏔 航拍山脉</button>
+                    <button class="preset-btn" onclick="setVideoPreset('Close-up of coffee being poured into a ceramic cup, steam rising, warm morning light, slow motion')">☕ 倾倒咖啡</button>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">视频描述 (Prompt)</label>
+                    <textarea class="form-textarea" id="videoPrompt" placeholder="描述你想要生成的视频内容...&#10;建议使用英文描述，效果更佳&#10;格式建议：[主体] + [动作] + [场景] + [镜头] + [光线] + [风格]"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">参考图片 (可选 - 图生视频)</label>
+                    <div class="drop-zone" id="videoDropZone" onclick="document.getElementById('videoFileInput').click()">
+                        <div class="drop-zone-icon">🖼</div>
+                        <div class="drop-zone-text">拖拽图片到此处，或<strong>点击选择</strong></div>
+                        <div class="drop-zone-hint">支持 JPG / PNG / GIF / WebP</div>
+                        <input type="file" class="upload-input" id="videoFileInput" accept="image/*" onchange="handleDropZoneFile(this, 'video')">
+                    </div>
+                    <div class="form-hint" style="margin-top:8px;">或者直接输入图片 URL：</div>
+                    <input type="text" class="form-input" id="videoImageUrl" placeholder="留空则为纯文本生成视频，填入图片URL则为图生视频" style="margin-top:4px;">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">分辨率</label>
+                        <select class="form-select" id="videoResolution">
+                            <option value="1152x768">1152 × 768 (默认)</option>
+                            <option value="1280x720">1280 × 720 (720p)</option>
+                            <option value="1920x1080">1920 × 1080 (1080p)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">帧数 (num_frames)</label>
+                        <select class="form-select" id="videoFrames">
+                            <option value="81">81 帧 (~3秒)</option>
+                            <option value="121" selected>121 帧 (~5秒)</option>
+                            <option value="241">241 帧 (~10秒)</option>
+                            <option value="441">441 帧 (~18秒)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">帧率 (frame_rate)</label>
+                        <select class="form-select" id="videoFrameRate">
+                            <option value="24" selected>24 fps</option>
+                            <option value="30">30 fps</option>
+                            <option value="60">60 fps</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">负面提示词 (可选)</label>
+                    <input type="text" class="form-input" id="videoNegativePrompt" placeholder="描述不希望出现的元素，例如：blurry, low quality, distorted">
+                </div>
+
+                <button class="btn btn-primary" id="btnGenerateVideo" onclick="generateVideo()">
+                    🎬 生成视频
+                </button>
+
+                <div class="result-area" id="videoResult">
+                    <div class="card" style="margin-top:12px;">
+                        <div class="card-header">🎥 视频生成中...</div>
+                        <p style="font-size:13px;color:var(--text2);" id="videoStatusText">任务已提交，等待处理...</p>
+                        <div style="margin-top:12px;">
+                            <div style="background:var(--border);border-radius:4px;height:4px;overflow:hidden;">
+                                <div id="videoProgressBar" style="width:0%;height:100%;background:var(--accent);transition:width 0.5s;"></div>
+                            </div>
+                        </div>
+                        <video class="result-video" id="videoResultPlayer" controls style="display:none;margin-top:16px;"></video>
+                        <div class="result-actions" id="videoResultActions" style="display:none;">
+                            <button class="btn btn-sm" id="downloadVideoBtn" onclick="downloadVideo()">📥 下载视频</button>
+                            <button class="btn btn-sm" id="copyVideoUrlBtn" onclick="copyVideoUrl()">📋 复制URL</button>
+                            <span style="font-size:11px;color:var(--success);margin-left:8px;display:none;" id="videoLocalSaved">✅ 已保存到 videos 文件夹</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: 视频任务列表 -->
+        <div class="tab-content" id="tab-videoTasks">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">📋</span> 视频任务列表
+                    <button class="btn btn-sm" style="margin-left:auto;" onclick="refreshTaskList()">🔄 刷新</button>
+                </div>
+                <div class="task-list" id="taskList">
+                    <p style="color:var(--text2);text-align:center;padding:20px;">暂无视频任务</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: 本地文件 -->
+        <div class="tab-content" id="tab-localFiles">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">📁</span> 本地生成文件
+                    <button class="btn btn-sm" style="margin-left:auto;" onclick="refreshLocalFiles()">🔄 刷新</button>
+                </div>
+                <div style="margin-bottom:12px;display:flex;gap:8px;">
+                    <button class="btn btn-sm" id="localTabPictures" style="background:var(--accent);border-color:var(--accent);" onclick="switchLocalTab('pictures')">🖼 图片</button>
+                    <button class="btn btn-sm" id="localTabVideos" onclick="switchLocalTab('videos')">🎬 视频</button>
+                </div>
+                <div class="task-list" id="localFileList">
+                    <p style="color:var(--text2);text-align:center;padding:20px;">加载中...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal">
+            <div class="modal-title">⚙ API 设置</div>
+            <div class="form-group">
+                <label class="form-label">Agnes AI API Key</label>
+                <input type="password" class="form-input" id="apiKeyInput" placeholder="sk-...">
+                <div class="form-hint">
+                    在 <a href="https://platform.agnes-ai.com" target="_blank" style="color:var(--accent);">platform.agnes-ai.com</a> 注册并获取 API Key
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Base URL</label>
+                <input type="text" class="form-input" value="https://apihub.agnes-ai.com/v1" readonly disabled>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeSettings()">取消</button>
+                <button class="btn btn-primary" onclick="saveApiKey()">💾 保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner" style="width:40px;height:40px;border-width:3px;"></div>
+        <div class="loading-text" id="loadingText">处理中...</div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ==================== 全局状态 ====================
+        let currentImageUrl = '';
+        let currentImg2ImgUrl = '';
+        let currentVideoUrl = '';
+        let videoPollingTimer = null;
+        let currentLocalTab = 'pictures';
+        let uploadedImg2ImgUrl = '';   // 图生图上传后的本地图片 URL
+        let uploadedVideoImgUrl = '';  // 视频生成上传后的本地图片 URL
+
+        // ==================== 初始化 ====================
+        document.addEventListener('DOMContentLoaded', () => {
+            checkApiKeyStatus();
+            initDropZones();
+        });
+
+        // ==================== Tab 切换 ====================
+        function switchTab(name) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`.tab[onclick="switchTab('${name}')"]`).classList.add('active');
+            document.getElementById(`tab-${name}`).classList.add('active');
+            if (name === 'videoTasks') refreshTaskList();
+            if (name === 'localFiles') refreshLocalFiles();
+        }
+
+        // ==================== 拖拽上传 ====================
+        function initDropZones() {
+            const zones = [
+                { id: 'img2imgDropZone', type: 'img2img' },
+                { id: 'videoDropZone', type: 'video' }
+            ];
+
+            zones.forEach(({ id, type }) => {
+                const zone = document.getElementById(id);
+                if (!zone) return;
+
+                // 阻止默认拖拽行为
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+                    zone.addEventListener(evt, (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    });
+                });
+
+                // 拖入
+                zone.addEventListener('dragenter', () => zone.classList.add('drag-over'));
+                zone.addEventListener('dragover', () => zone.classList.add('drag-over'));
+                zone.addEventListener('dragleave', (e) => {
+                    if (!zone.contains(e.relatedTarget)) {
+                        zone.classList.remove('drag-over');
+                    }
+                });
+
+                // 放下
+                zone.addEventListener('drop', (e) => {
+                    zone.classList.remove('drag-over');
+                    const files = e.dataTransfer.files;
+                    if (files.length > 0) {
+                        handleUploadFile(files[0], type);
+                    }
+                });
+            });
+        }
+
+        async function handleUploadFile(file, type) {
+            // 验证文件类型
+            if (!file.type.startsWith('image/')) {
+                showToast('请上传图片文件', 'error');
+                return;
+            }
+
+            showLoading('正在上传图片...');
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const resp = await fetch('/api/upload/image', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await resp.json();
+
+                if (data.success) {
+                    const fullUrl = window.location.origin + data.url;
+                    if (type === 'img2img') {
+                        uploadedImg2ImgUrl = fullUrl;
+                        document.getElementById('img2imgUrl').value = fullUrl;
+                        showDropZonePreview('img2imgDropZone', data.url);
+                    } else if (type === 'video') {
+                        uploadedVideoImgUrl = fullUrl;
+                        document.getElementById('videoImageUrl').value = fullUrl;
+                        showDropZonePreview('videoDropZone', data.url);
+                    }
+                    showToast('图片上传成功！', 'success');
+                } else {
+                    showToast(data.error || '上传失败', 'error');
+                }
+            } catch (e) {
+                showToast('上传失败: ' + e.message, 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function handleDropZoneFile(input, type) {
+            if (input.files && input.files.length > 0) {
+                handleUploadFile(input.files[0], type);
+            }
+            // 重置 input 以便可以重新选择同一文件
+            input.value = '';
+        }
+
+        function showDropZonePreview(zoneId, imageUrl) {
+            const zone = document.getElementById(zoneId);
+            zone.classList.add('has-image');
+            zone.onclick = null; // 移除点击事件
+
+            zone.innerHTML = `
+                <img class="drop-zone-preview" src="${imageUrl}" alt="预览">
+                <button class="drop-zone-remove" onclick="event.stopPropagation(); removeDropZoneImage('${zoneId}', '${zoneId === 'img2imgDropZone' ? 'img2img' : 'video'}')">✕</button>
+            `;
+        }
+
+        function removeDropZoneImage(zoneId, type) {
+            const zone = document.getElementById(zoneId);
+            zone.classList.remove('has-image');
+            zone.onclick = function() {
+                const inputId = type === 'img2img' ? 'img2imgFileInput' : 'videoFileInput';
+                document.getElementById(inputId).click();
+            };
+
+            zone.innerHTML = `
+                <div class="drop-zone-icon">🖼</div>
+                <div class="drop-zone-text">拖拽图片到此处，或<strong>点击选择</strong></div>
+                <div class="drop-zone-hint">支持 JPG / PNG / GIF / WebP</div>
+                <input type="file" class="upload-input" id="${type === 'img2img' ? 'img2imgFileInput' : 'videoFileInput'}" accept="image/*" onchange="handleDropZoneFile(this, '${type}')">
+            `;
+
+            // 清除对应的 URL
+            if (type === 'img2img') {
+                uploadedImg2ImgUrl = '';
+                document.getElementById('img2imgUrl').value = '';
+            } else if (type === 'video') {
+                uploadedVideoImgUrl = '';
+                document.getElementById('videoImageUrl').value = '';
+            }
+        }
+
+        // ==================== Toast ====================
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast toast-${type} show`;
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // ==================== Loading ====================
+        function showLoading(text = '处理中...') {
+            document.getElementById('loadingText').textContent = text;
+            document.getElementById('loadingOverlay').classList.add('show');
+        }
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.remove('show');
+        }
+
+        // ==================== API Key ====================
+        async function checkApiKeyStatus() {
+            try {
+                const resp = await fetch('/api/config');
+                const data = await resp.json();
+                updateApiKeyStatus(data.api_key_masked);
+            } catch (e) {
+                updateApiKeyStatus('');
+            }
+        }
+
+        function updateApiKeyStatus(masked) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            if (masked) {
+                dot.classList.add('active');
+                text.textContent = `API Key: ${masked}`;
+            } else {
+                dot.classList.remove('active');
+                text.textContent = '未配置 API Key';
+            }
+        }
+
+        function openSettings() {
+            document.getElementById('settingsModal').classList.add('show');
+            document.getElementById('apiKeyInput').value = '';
+            document.getElementById('apiKeyInput').focus();
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsModal').classList.remove('show');
+        }
+
+        async function saveApiKey() {
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            if (!apiKey) {
+                showToast('请输入 API Key', 'error');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: apiKey })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast('API Key 已保存', 'success');
+                    closeSettings();
+                    checkApiKeyStatus();
+                } else {
+                    showToast(data.message || '保存失败', 'error');
+                }
+            } catch (e) {
+                showToast('保存失败: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== Presets ====================
+        function setImagePreset(text) {
+            document.getElementById('imagePrompt').value = text;
+        }
+        function setVideoPreset(text) {
+            document.getElementById('videoPrompt').value = text;
+        }
+
+        // ==================== 图片生成 ====================
+        async function generateImage() {
+            const prompt = document.getElementById('imagePrompt').value.trim();
+            if (!prompt) {
+                showToast('请输入图片描述', 'error');
+                return;
+            }
+
+            const model = document.getElementById('imageModel').value;
+            const size = document.getElementById('imageSize').value;
+            const btn = document.getElementById('btnGenerateImage');
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> 生成中...';
+            showLoading('正在生成图片...');
+
+            try {
+                const resp = await fetch('/api/image/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt, model, size })
+                });
+                const data = await resp.json();
+
+                if (data.success && data.image_url) {
+                    currentImageUrl = data.image_url;
+                    document.getElementById('imageResultImg').src = data.image_url;
+                    document.getElementById('imageResult').classList.add('show');
+                    const localSaved = document.getElementById('imageLocalSaved');
+                    if (data.local_file) {
+                        localSaved.style.display = 'inline';
+                        localSaved.textContent = '✅ 已保存到 pictures/' + data.local_file;
+                    } else {
+                        localSaved.style.display = 'none';
+                    }
+                    showToast('图片生成成功！', 'success');
+                } else {
+                    showToast(data.error || '生成失败', 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '✨ 生成图片';
+                hideLoading();
+            }
+        }
+
+        function downloadImage() {
+            if (!currentImageUrl) return;
+            const a = document.createElement('a');
+            a.href = currentImageUrl;
+            a.download = 'agnes-image.png';
+            a.target = '_blank';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function copyImageUrl() {
+            if (!currentImageUrl) return;
+            navigator.clipboard.writeText(currentImageUrl).then(() => {
+                showToast('图片URL已复制到剪贴板', 'success');
+            });
+        }
+
+        // ==================== 图生图 ====================
+        async function generateImg2Img() {
+            const prompt = document.getElementById('img2imgPrompt').value.trim();
+            const imageUrl = document.getElementById('img2imgUrl').value.trim();
+            if (!prompt || !imageUrl) {
+                showToast('请输入编辑描述和图片URL', 'error');
+                return;
+            }
+
+            const size = document.getElementById('img2imgSize').value;
+            const btn = document.getElementById('btnImg2Img');
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> 编辑中...';
+            showLoading('正在编辑图片...');
+
+            try {
+                const resp = await fetch('/api/image/img2img', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt, image_url: imageUrl, size })
+                });
+                const data = await resp.json();
+
+                if (data.success && data.image_url) {
+                    currentImg2ImgUrl = data.image_url;
+                    document.getElementById('img2imgResultImg').src = data.image_url;
+                    document.getElementById('img2imgResult').classList.add('show');
+                    const localSaved = document.getElementById('img2imgLocalSaved');
+                    if (data.local_file) {
+                        localSaved.style.display = 'inline';
+                        localSaved.textContent = '✅ 已保存到 pictures/' + data.local_file;
+                    } else {
+                        localSaved.style.display = 'none';
+                    }
+                    showToast('图片编辑成功！', 'success');
+                } else {
+                    showToast(data.error || '编辑失败', 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🎨 开始编辑';
+                hideLoading();
+            }
+        }
+
+        function downloadImg2Img() {
+            if (!currentImg2ImgUrl) return;
+            const a = document.createElement('a');
+            a.href = currentImg2ImgUrl;
+            a.download = 'agnes-edited-image.png';
+            a.target = '_blank';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function copyImg2ImgUrl() {
+            if (!currentImg2ImgUrl) return;
+            navigator.clipboard.writeText(currentImg2ImgUrl).then(() => {
+                showToast('图片URL已复制到剪贴板', 'success');
+            });
+        }
+
+        // ==================== 视频生成 ====================
+        async function generateVideo() {
+            const prompt = document.getElementById('videoPrompt').value.trim();
+            if (!prompt) {
+                showToast('请输入视频描述', 'error');
+                return;
+            }
+
+            const resolution = document.getElementById('videoResolution').value.split('x');
+            const width = parseInt(resolution[0]);
+            const height = parseInt(resolution[1]);
+            const numFrames = parseInt(document.getElementById('videoFrames').value);
+            const frameRate = parseInt(document.getElementById('videoFrameRate').value);
+            const imageUrl = document.getElementById('videoImageUrl').value.trim();
+            const negativePrompt = document.getElementById('videoNegativePrompt').value.trim();
+
+            const btn = document.getElementById('btnGenerateVideo');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> 提交中...';
+
+            try {
+                const resp = await fetch('/api/video/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt, width, height,
+                        num_frames: numFrames,
+                        frame_rate: frameRate,
+                        image_url: imageUrl || undefined,
+                        negative_prompt: negativePrompt || undefined
+                    })
+                });
+                const data = await resp.json();
+
+                if (data.success) {
+                    document.getElementById('videoResult').classList.add('show');
+                    document.getElementById('videoResultPlayer').style.display = 'none';
+                    document.getElementById('videoResultActions').style.display = 'none';
+                    document.getElementById('videoStatusText').textContent = '任务已提交，正在排队处理...';
+                    document.getElementById('videoProgressBar').style.width = '5%';
+                    showToast('视频任务已提交！请在"视频任务"标签页查看进度', 'info');
+
+                    // 开始轮询
+                    startVideoPolling(data.task_id);
+                } else {
+                    showToast(data.error || '提交失败', 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🎬 生成视频';
+            }
+        }
+
+        function startVideoPolling(taskId) {
+            if (videoPollingTimer) clearInterval(videoPollingTimer);
+
+            let pollCount = 0;
+            const maxPolls = 120;
+            const progressEl = document.getElementById('videoProgressBar');
+            const statusText = document.getElementById('videoStatusText');
+            const player = document.getElementById('videoResultPlayer');
+            const actions = document.getElementById('videoResultActions');
+
+            videoPollingTimer = setInterval(async () => {
+                pollCount++;
+                try {
+                    const resp = await fetch(`/api/video/status/${taskId}`);
+                    const data = await resp.json();
+
+                    if (!data.success) {
+                        clearInterval(videoPollingTimer);
+                        statusText.textContent = '查询失败';
+                        return;
+                    }
+
+                    // 更新进度条
+                    const progress = Math.min(pollCount * 2, 95);
+                    progressEl.style.width = progress + '%';
+
+                    // 更新状态文本
+                    const statusMap = {
+                        'queued': '排队等待中...',
+                        'in_progress': '正在生成视频，请耐心等待...',
+                        'completed': '视频生成完成！',
+                        'failed': '视频生成失败'
+                    };
+                    statusText.textContent = statusMap[data.status] || `状态: ${data.status}`;
+
+                    if (data.status === 'completed') {
+                        clearInterval(videoPollingTimer);
+                        progressEl.style.width = '100%';
+
+                        // 优先使用远程 URL，其次使用本地文件
+                        currentVideoUrl = data.video_url;
+                        const localFileUrl = data.local_file ? `/videos/${data.local_file}` : null;
+                        const playSrc = currentVideoUrl || localFileUrl;
+
+                        if (playSrc) {
+                            player.src = playSrc;
+                            player.style.display = 'block';
+                            actions.style.display = 'flex';
+                            if (!currentVideoUrl && localFileUrl) {
+                                document.getElementById('downloadVideoBtn').style.display = 'none';
+                                document.getElementById('copyVideoUrlBtn').style.display = 'none';
+                            }
+                        } else {
+                            statusText.textContent += ' (未获取到视频URL，请查看原始响应)';
+                        }
+
+                        const localSaved = document.getElementById('videoLocalSaved');
+                        if (data.local_file) {
+                            localSaved.style.display = 'inline';
+                            localSaved.textContent = '✅ 已保存到 videos/' + data.local_file;
+                        }
+
+                        showToast('视频生成完成！', 'success');
+                    } else if (data.status === 'failed') {
+                        clearInterval(videoPollingTimer);
+                        progressEl.style.width = '100%';
+                        progressEl.style.background = 'var(--error)';
+                        statusText.textContent = '生成失败: ' + (data.error || '未知错误');
+                        showToast('视频生成失败', 'error');
+                    }
+                } catch (e) {
+                    // 继续轮询
+                }
+
+                if (pollCount >= maxPolls) {
+                    clearInterval(videoPollingTimer);
+                    statusText.textContent = '轮询超时，请手动刷新任务列表';
+                }
+            }, 10000); // 每10秒轮询
+        }
+
+        function downloadVideo() {
+            if (!currentVideoUrl) return;
+            window.open(currentVideoUrl, '_blank');
+        }
+
+        function copyVideoUrl() {
+            if (!currentVideoUrl) return;
+            navigator.clipboard.writeText(currentVideoUrl).then(() => {
+                showToast('视频URL已复制到剪贴板', 'success');
+            });
+        }
+
+        // ==================== 本地文件管理 ====================
+        function switchLocalTab(type) {
+            currentLocalTab = type;
+            document.getElementById('localTabPictures').style.background = type === 'pictures' ? 'var(--accent)' : 'var(--surface2)';
+            document.getElementById('localTabPictures').style.borderColor = type === 'pictures' ? 'var(--accent)' : 'var(--border)';
+            document.getElementById('localTabVideos').style.background = type === 'videos' ? 'var(--accent)' : 'var(--surface2)';
+            document.getElementById('localTabVideos').style.borderColor = type === 'videos' ? 'var(--accent)' : 'var(--border)';
+            refreshLocalFiles();
+        }
+
+        async function refreshLocalFiles() {
+            const listEl = document.getElementById('localFileList');
+            listEl.innerHTML = '<p style="color:var(--text2);text-align:center;padding:20px;">加载中...</p>';
+
+            try {
+                const resp = await fetch(`/api/files/${currentLocalTab}`);
+                const data = await resp.json();
+
+                if (!data.files || data.files.length === 0) {
+                    listEl.innerHTML = `<p style="color:var(--text2);text-align:center;padding:20px;">暂无${currentLocalTab === 'pictures' ? '图片' : '视频'}文件</p>`;
+                    return;
+                }
+
+                listEl.innerHTML = data.files.map(f => {
+                    const isVideo = currentLocalTab === 'videos';
+                    const previewHtml = isVideo
+                        ? `<video src="${f.url}" style="width:100%;max-width:300px;border-radius:var(--radius-sm);" controls></video>`
+                        : `<img src="${f.url}" style="width:100%;max-width:300px;border-radius:var(--radius-sm);" loading="lazy">`;
+
+                    return `
+                        <div class="task-item" style="flex-direction:column;align-items:flex-start;gap:10px;">
+                            <div style="display:flex;width:100%;justify-content:space-between;align-items:center;">
+                                <div class="task-info">
+                                    <div class="task-prompt" style="font-family:monospace;font-size:12px;">${f.filename}</div>
+                                    <div class="task-time">${f.modified} | ${f.size_display}</div>
+                                </div>
+                                <div style="display:flex;gap:4px;flex-shrink:0;">
+                                    <button class="btn btn-sm btn-success" onclick="window.open('${f.url}', '_blank')">👁 查看</button>
+                                    <button class="btn btn-sm" onclick="navigator.clipboard.writeText(window.location.origin + '${f.url}').then(()=>showToast('已复制','success'))">📋 复制</button>
+                                </div>
+                            </div>
+                            ${previewHtml}
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                listEl.innerHTML = '<p style="color:var(--error);text-align:center;padding:20px;">加载失败: ' + e.message + '</p>';
+            }
+        }
+
+        // ==================== 视频任务列表 ====================
+        async function refreshTaskList() {
+            try {
+                const resp = await fetch('/api/video/tasks');
+                const data = await resp.json();
+                const listEl = document.getElementById('taskList');
+
+                if (!data.tasks || data.tasks.length === 0) {
+                    listEl.innerHTML = '<p style="color:var(--text2);text-align:center;padding:20px;">暂无视频任务</p>';
+                    return;
+                }
+
+                listEl.innerHTML = data.tasks.map(task => {
+                    const statusClass = `status-${task.status}`;
+                    const statusLabels = {
+                        'queued': '排队中',
+                        'in_progress': '生成中',
+                        'completed': '已完成',
+                        'failed': '失败'
+                    };
+                    const statusLabel = statusLabels[task.status] || task.status;
+                    const time = new Date(task.created_at * 1000).toLocaleString('zh-CN');
+
+                    let actionsHtml = '';
+                    if (task.status === 'completed' && task.video_url) {
+                        actionsHtml = `
+                            <button class="btn btn-sm btn-success" onclick="window.open('${task.video_url}', '_blank')">▶ 播放</button>
+                            <button class="btn btn-sm" onclick="navigator.clipboard.writeText('${task.video_url}').then(()=>showToast('已复制','success'))">📋 复制</button>
+                        `;
+                    } else if (task.status === 'queued' || task.status === 'in_progress') {
+                        actionsHtml = `<button class="btn btn-sm" onclick="refreshTaskList()">🔄 刷新状态</button>`;
+                    }
+
+                    return `
+                        <div class="task-item">
+                            <div class="task-info">
+                                <div class="task-prompt">${task.prompt}</div>
+                                <div class="task-time">${time} | ID: ${task.task_id?.substring(0,12)}...</div>
+                            </div>
+                            <span class="task-status ${statusClass}">${statusLabel}</span>
+                            <div style="display:flex;gap:4px;">${actionsHtml}</div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                document.getElementById('taskList').innerHTML =
+                    '<p style="color:var(--error);text-align:center;padding:20px;">加载失败: ' + e.message + '</p>';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -5,15 +5,31 @@ PyInstaller 打包配置文件
 """
 
 import sys
+import os
 from pathlib import Path
 
 # 获取项目根目录
 project_dir = Path.cwd()
 
+# 查找 imageio-ffmpeg 内置的 ffmpeg 二进制文件
+ffmpeg_binary = None
+try:
+    import imageio_ffmpeg
+    ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
+except ImportError:
+    pass
+
+binaries_list = []
+if ffmpeg_binary and os.path.exists(ffmpeg_binary):
+    binaries_list.append((ffmpeg_binary, 'imageio_ffmpeg/binaries'))
+    print(f'[spec] 找到 ffmpeg: {ffmpeg_binary}')
+else:
+    print('[spec] 警告: 未找到 ffmpeg 二进制文件，视频拼接功能将不可用')
+
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries_list,
     datas=[
         # 将 static 目录打包进 exe
         ('static/index.html', 'static'),
@@ -25,9 +41,11 @@ a = Analysis(
         'requests',
         'json',
         'threading',
+        'subprocess',
         'os',
         'sys',
         'webbrowser',
+        'imageio_ffmpeg',
         # requests / urllib3 底层依赖 email 模块
         'email',
         'email.mime.text',
@@ -73,7 +91,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,          # 不显示控制台窗口
+    console=True,           # 显示控制台窗口，方便查看日志和 Ctrl+C 退出
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

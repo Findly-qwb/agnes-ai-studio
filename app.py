@@ -1510,7 +1510,6 @@ def drama_start():
     """启动短剧生成流水线"""
     data = request.get_json()
     api_key = get_api_key()
-    text_api_key = get_text_api_key()
     if not api_key:
         return jsonify({'success': False, 'error': '请先配置 API Key'}), 401
 
@@ -1523,6 +1522,9 @@ def drama_start():
     image_model = data.get('image_model', DEFAULT_IMAGE_MODEL)
     video_model = data.get('video_model', DEFAULT_VIDEO_MODEL)
     drama_id = uuid.uuid4().hex[:12]
+
+    # 根据文本模型获取对应厂商的 API Key
+    text_api_key = get_vendor_api_key(text_model, fallback_key=api_key)
 
     with drama_lock:
         drama_tasks[drama_id] = {

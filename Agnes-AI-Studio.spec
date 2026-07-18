@@ -33,6 +33,21 @@ a = Analysis(
     datas=[
         # 将 static 目录打包进 exe
         ('static/index.html', 'static'),
+        # 将 src 包打包进 exe
+        ('src/__init__.py', 'src'),
+        ('src/config.py', 'src'),
+        ('src/models.py', 'src'),
+        ('src/services/__init__.py', 'src/services'),
+        ('src/services/text_model.py', 'src/services'),
+        ('src/services/video_gen.py', 'src/services'),
+        ('src/services/video_merge.py', 'src/services'),
+        ('src/routes/__init__.py', 'src/routes'),
+        ('src/routes/pages.py', 'src/routes'),
+        ('src/routes/api_config.py', 'src/routes'),
+        ('src/routes/image.py', 'src/routes'),
+        ('src/routes/video.py', 'src/routes'),
+        ('src/routes/drama.py', 'src/routes'),
+        ('src/routes/files.py', 'src/routes'),
     ],
     hiddenimports=[
         'flask',
@@ -46,6 +61,21 @@ a = Analysis(
         'sys',
         'webbrowser',
         'imageio_ffmpeg',
+        # src 包及其子模块
+        'src',
+        'src.config',
+        'src.models',
+        'src.services',
+        'src.services.text_model',
+        'src.services.video_gen',
+        'src.services.video_merge',
+        'src.routes',
+        'src.routes.pages',
+        'src.routes.api_config',
+        'src.routes.image',
+        'src.routes.video',
+        'src.routes.drama',
+        'src.routes.files',
         # requests / urllib3 底层依赖 email 模块
         'email',
         'email.mime.text',

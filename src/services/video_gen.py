@@ -36,19 +36,36 @@ def download_and_save_file(url, subdir, prefix, ext, max_retries=3):
     filename = f"{prefix}_{timestamp}_{short_uuid}.{ext}"
     filepath = os.path.join(target_dir, filename)
 
+    # 总下载超时（秒）
+    total_timeout = 300 if ext == 'mp4' else 120
+
     for attempt in range(max_retries):
         try:
             print(f"[下载] {subdir}/{filename} (尝试 {attempt+1}/{max_retries}) url={url[:100]}...")
-            resp = requests.get(url, timeout=180, stream=True)
+            resp = requests.get(url, timeout=(30, 60), stream=True)  # 连接超时30s，读取超时60s
             resp.raise_for_status()
 
             content_type = resp.headers.get('Content-Type', '')
             if ext == 'mp4' and 'video' not in content_type and 'octet-stream' not in content_type and 'mp4' not in content_type:
                 print(f"[下载警告] Content-Type 不是视频: {content_type}")
 
+            total_size = int(resp.headers.get('Content-Length', 0))
+            if total_size > 0:
+                print(f"[下载] 预期文件大小: {total_size // 1024}KB")
+            
+            downloaded = 0
+            start_time = time.time()
             with open(filepath, 'wb') as f:
                 for chunk in resp.iter_content(chunk_size=8192):
+                    if shutdown_event and shutdown_event.is_set():
+                        print(f"[下载] 收到关闭信号，停止下载")
+                        return None
+                    # 检查总超时
+                    if time.time() - start_time > total_timeout:
+                        print(f"[下载] 总下载超时({total_timeout}s)，已下载 {downloaded // 1024}KB")
+                        raise requests.exceptions.Timeout(f"下载总超时({total_timeout}s)")
                     f.write(chunk)
+                    downloaded += len(chunk)
 
             file_size = os.path.getsize(filepath)
             if file_size < 1000:
@@ -61,10 +78,11 @@ def download_and_save_file(url, subdir, prefix, ext, max_retries=3):
                     os.remove(filepath)
                     return None
 
-            print(f"[保存成功] {subdir}/{filename} ({file_size // 1024}KB)")
+            elapsed = time.time() - start_time
+            print(f"[保存成功] {subdir}/{filename} ({file_size // 1024}KB, {elapsed:.1f}s)")
             return filename
         except Exception as e:
-            print(f"[下载失败] {subdir}/{filename} 尝试{attempt+1}: {e}")
+            print(f"[下载失败] {subdir}/{filename} 尝试{attempt+1}: {type(e).__name__}: {e}")
             if os.path.exists(filepath):
                 try:
                     os.remove(filepath)

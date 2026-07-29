@@ -96,14 +96,14 @@ def resolve_image_url(image_url):
 
 # ==================== 常量配置 ====================
 
-BASE_URL = "https://apihub.agnes-ai.com/v1"
+BASE_URL = "https://apihub.agnes-ai.cn/v1"
 
 # 全局关闭事件：用于通知所有后台线程退出
 shutdown_event = threading.Event()
 
 # ---------- 厂商 Base URL 映射（通用，文本/图片/视频共用）----------
 VENDOR_BASE_URLS = {
-    'agnes': 'https://apihub.agnes-ai.com/v1',
+    'agnes': 'https://apihub.agnes-ai.cn/v1',
     'deepseek': 'https://api.deepseek.com/v1',
     'gpt': 'https://api.openai.com/v1',
     'qwen': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -129,7 +129,12 @@ def get_vendor_from_model(model):
     return 'agnes'
 
 def get_vendor_base_url(model):
-    """根据模型名称获取厂商 Base URL（优先使用自定义配置）"""
+    """根据模型名称获取厂商 Base URL（优先检查自定义模型，其次自定义配置，最后默认）"""
+    # 先检查自定义模型
+    custom_config = get_custom_model_config(model)
+    if custom_config and custom_config.get('base_url'):
+        return custom_config['base_url']
+    
     config_file = get_config_path()
     if os.path.exists(config_file):
         with open(config_file, 'r', encoding='utf-8') as f:
@@ -146,7 +151,12 @@ def get_vendor_base_url(model):
     return VENDOR_BASE_URLS.get(get_vendor_from_model(model), BASE_URL)
 
 def get_vendor_api_key(model, fallback_key=None):
-    """根据模型名称获取厂商 API Key（优先使用厂商专用 Key，回退到全局 Key）"""
+    """根据模型名称获取厂商 API Key（优先检查自定义模型，其次厂商专用 Key，回退到全局 Key）"""
+    # 先检查自定义模型
+    custom_config = get_custom_model_config(model)
+    if custom_config and custom_config.get('api_key'):
+        return custom_config['api_key']
+    
     vendor = get_vendor_from_model(model)
     config_file = get_config_path()
     if os.path.exists(config_file):
@@ -188,3 +198,80 @@ def get_text_api_key():
         if text_key:
             return text_key
     return get_api_key()
+
+
+# ==================== 自定义模型管理 ====================
+
+def get_custom_models():
+    """获取所有自定义模型列表"""
+    config_file = get_config_path()
+    if os.path.exists(config_file):
+        with open(config_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get('custom_models', [])
+    return []
+
+
+def save_custom_models(custom_models):
+    """保存自定义模型列表"""
+    config_file = get_config_path()
+    data = {}
+    if os.path.exists(config_file):
+        with open(config_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    data['custom_models'] = custom_models
+    with open(config_file, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def add_custom_model(model_id, display_name, model_type, base_url, api_key=''):
+    """添加自定义模型
+    
+    Args:
+        model_id: 模型 ID（用于 API 调用）
+        display_name: 显示名称
+        model_type: 模型类型 (text/image/video)
+        base_url: API Base URL
+        api_key: API Key（可选，未填则使用全局 Key）
+    """
+    custom_models = get_custom_models()
+    # 检查是否已存在
+    for m in custom_models:
+        if m['id'] == model_id:
+            return False, '模型 ID 已存在'
+    custom_models.append({
+        'id': model_id,
+        'name': display_name,
+        'type': model_type,
+        'base_url': base_url.rstrip('/'),
+        'api_key': api_key
+    })
+    save_custom_models(custom_models)
+    return True, '添加成功'
+
+
+def remove_custom_model(model_id):
+    """删除自定义模型"""
+    custom_models = get_custom_models()
+    custom_models = [m for m in custom_models if m['id'] != model_id]
+    save_custom_models(custom_models)
+    return True
+
+
+def get_custom_model_config(model_id):
+    """获取自定义模型的配置"""
+    custom_models = get_custom_models()
+    for m in custom_models:
+        if m['id'] == model_id:
+            return m
+    return None
+
+
+def get_custom_models_by_type(model_type):
+    """获取指定类型的自定义模型字典 {id: display_name}"""
+    custom_models = get_custom_models()
+    result = {}
+    for m in custom_models:
+        if m['type'] == model_type:
+            result[m['id']] = f"{m['name']} (自定义)"
+    return result

@@ -742,7 +742,7 @@
                     <span class="icon">🎭</span> 短剧生成 (Drama Pipeline)
                 </div>
                 <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">
-                    输入描述，自动完成 5 步流水线：① 生成剧本 → ② 拆分分镜 → ③ 提取素材并生成三视图 → ④ 逐镜头生成视频 → ⑤ 拼接完整视频
+                    输入描述，自动完成 5 步流水线：① 生成故事+剧本 → ② 拆分分镜 → ③ 提取素材并生成三视图 → ④ 逐镜头生成视频 → ⑤ 拼接完整视频
                 </p>
 
                 <div class="form-group">
@@ -791,8 +791,16 @@
                             <div id="dramaProgressBar" style="width:0%;height:100%;background:var(--accent);transition:width 0.5s;"></div>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--text2);">
-                            <span>① 剧本</span><span>② 分镜</span><span>③ 三视图</span><span>④ 视频</span><span>⑤ 拼接</span>
+                            <span>① 故事+剧本</span><span>② 分镜</span><span>③ 三视图</span><span>④ 视频</span><span>⑤ 拼接</span>
                         </div>
+                    </div>
+                </div>
+
+                <!-- 故事结果 -->
+                <div id="dramaStorySection" style="display:none;margin-top:16px;">
+                    <div class="card" style="background:var(--surface2);">
+                        <div class="card-header">📖 故事梗概</div>
+                        <pre id="dramaStoryContent" style="font-size:13px;color:var(--text);white-space:pre-wrap;line-height:1.7;max-height:250px;overflow-y:auto;background:var(--bg);padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);"></pre>
                     </div>
                 </div>
 
@@ -800,7 +808,7 @@
                 <div id="dramaScriptSection" style="display:none;margin-top:16px;">
                     <div class="card" style="background:var(--surface2);">
                         <div class="card-header">📝 剧本</div>
-                        <pre id="dramaScriptContent" style="font-size:12px;color:var(--text);white-space:pre-wrap;max-height:300px;overflow-y:auto;background:var(--bg);padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);"></pre>
+                        <pre id="dramaScriptContent" style="font-size:12px;color:var(--text);white-space:pre-wrap;max-height:400px;overflow-y:auto;background:var(--bg);padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);"></pre>
                     </div>
                 </div>
 
@@ -817,6 +825,25 @@
                     <div class="card" style="background:var(--surface2);">
                         <div class="card-header">🖼 三视图参考图</div>
                         <div id="dramaAssetsContent" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;"></div>
+                    </div>
+                </div>
+
+                <!-- 确认参考图按钮 -->
+                <div id="dramaResumeSection" style="display:none;margin-top:12px;">
+                    <div style="background:linear-gradient(135deg, #f39c12 0%, #e67e22 100%);border-radius:var(--radius);padding:16px;text-align:center;">
+                        <div style="font-size:14px;color:#fff;margin-bottom:12px;">⏸ 流水线已暂停 — 请检查参考图，如需替换可点击卡片上的「替换」按钮</div>
+                        <button id="dramaResumeBtn" class="btn btn-primary" style="background:#fff;color:#e67e22;font-weight:700;padding:10px 32px;" onclick="resumeDrama()">✅ 确认并继续生成视频</button>
+                    </div>
+                </div>
+
+                <!-- 合并前确认按钮 -->
+                <div id="dramaMergeConfirmSection" style="display:none;margin-top:12px;">
+                    <div style="background:linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);border-radius:var(--radius);padding:16px;text-align:center;">
+                        <div id="dramaMergeConfirmMsg" style="font-size:14px;color:#fff;margin-bottom:12px;">⏸ 部分镜头生成失败，是否等待重新生成后再合并？</div>
+                        <div style="display:flex;gap:12px;justify-content:center;">
+                            <button id="dramaMergeWaitBtn" class="btn btn-primary" style="background:#fff;color:#e74c3c;font-weight:700;padding:10px 24px;" onclick="confirmMerge(true)">⟳ 等待并重试失败镜头</button>
+                            <button id="dramaMergeNowBtn" class="btn btn-primary" style="background:rgba(255,255,255,0.2);color:#fff;font-weight:700;padding:10px 24px;border:1px solid rgba(255,255,255,0.4);" onclick="confirmMerge(false)">▶ 直接合并已成功的</button>
+                        </div>
                     </div>
                 </div>
 
@@ -857,7 +884,7 @@
                 <label class="form-label">🔑 Agnes AI API Key（全局）</label>
                 <input type="password" class="form-input" id="apiKeyInput" placeholder="sk-...">
                 <div class="form-hint">
-                    在 <a href="https://platform.agnes-ai.com" target="_blank" style="color:var(--accent);">platform.agnes-ai.com</a> 注册获取
+                    在 <a href="https://platform.agnes-ai.cn" target="_blank" style="color:var(--accent);">platform.agnes-ai.cn</a> 注册获取
                 </div>
             </div>
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">
@@ -885,6 +912,30 @@
             <div class="form-hint" style="margin-bottom:8px;">
                 豆包、MiniMax、千问的生视频模型复用上方对应厂商的 API Key
             </div>
+            <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px;">🔧 自定义模型</div>
+            <div class="form-hint" style="margin-bottom:8px;">
+                添加自己的模型，需配置对应的 API 地址和 Key
+            </div>
+            <div id="customModelsList" style="margin-bottom:8px;"></div>
+            <div id="addCustomModelForm" style="display:none;background:var(--surface2);padding:10px;border-radius:8px;margin-bottom:8px;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                    <input type="text" class="form-input" id="customModelId" placeholder="模型 ID（如 gpt-4o）" style="font-size:11px;">
+                    <input type="text" class="form-input" id="customModelName" placeholder="显示名称（如 GPT-4o）" style="font-size:11px;">
+                    <select class="form-input" id="customModelType" style="font-size:11px;">
+                        <option value="text">文本模型</option>
+                        <option value="image">生图模型</option>
+                        <option value="video">生视频模型</option>
+                    </select>
+                    <input type="text" class="form-input" id="customModelBaseUrl" placeholder="API 地址（如 https://api.xxx.com/v1）" style="font-size:11px;">
+                </div>
+                <input type="password" class="form-input" id="customModelApiKey" placeholder="API Key（可选，未填则用全局 Key）" style="font-size:11px;margin-top:6px;">
+                <div style="display:flex;gap:6px;margin-top:6px;">
+                    <button class="btn btn-sm btn-primary" onclick="saveCustomModel()" style="font-size:11px;">✅ 保存</button>
+                    <button class="btn btn-sm" onclick="document.getElementById('addCustomModelForm').style.display='none'" style="font-size:11px;">取消</button>
+                </div>
+            </div>
+            <button class="btn btn-sm" onclick="document.getElementById('addCustomModelForm').style.display='block';loadCustomModelsList()" style="font-size:11px;">➕ 添加自定义模型</button>
             <div class="modal-actions">
                 <button class="btn" onclick="closeSettings()">取消</button>
                 <button class="btn btn-primary" onclick="saveApiKey()">💾 保存</button>
@@ -1122,6 +1173,91 @@
 
         function closeSettings() {
             document.getElementById('settingsModal').classList.remove('show');
+        }
+
+        // ==================== 自定义模型管理 ====================
+        async function loadCustomModelsList() {
+            try {
+                const resp = await fetch('/api/custom-models');
+                const data = await resp.json();
+                const el = document.getElementById('customModelsList');
+                if (!data.models || data.models.length === 0) {
+                    el.innerHTML = '<div style="font-size:11px;color:var(--text2);">暂无自定义模型</div>';
+                    return;
+                }
+                const typeLabels = { text: '📝文本', image: '🖼生图', video: '🎬视频' };
+                el.innerHTML = data.models.map(m => `
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:var(--surface2);border-radius:4px;margin-bottom:4px;font-size:11px;">
+                        <span><b>${m.name}</b> <span style="color:var(--text2);">[${typeLabels[m.type] || m.type}]</span> <code style="font-size:10px;color:var(--accent);">${m.id}</code></span>
+                        <button onclick="deleteCustomModel('${m.id}')" style="color:var(--error);background:none;border:none;cursor:pointer;font-size:12px;" title="删除">✖</button>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('加载自定义模型失败:', e);
+            }
+        }
+
+        async function saveCustomModel() {
+            const modelId = document.getElementById('customModelId').value.trim();
+            const displayName = document.getElementById('customModelName').value.trim();
+            const modelType = document.getElementById('customModelType').value;
+            const baseUrl = document.getElementById('customModelBaseUrl').value.trim();
+            const apiKey = document.getElementById('customModelApiKey').value.trim();
+
+            if (!modelId || !displayName || !baseUrl) {
+                showToast('请填写模型 ID、名称和 API 地址', 'error');
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/custom-models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model_id: modelId,
+                        display_name: displayName,
+                        model_type: modelType,
+                        base_url: baseUrl,
+                        api_key: apiKey
+                    })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast('自定义模型已添加', 'success');
+                    document.getElementById('addCustomModelForm').style.display = 'none';
+                    // 清空输入框
+                    ['customModelId', 'customModelName', 'customModelBaseUrl', 'customModelApiKey'].forEach(id => {
+                        document.getElementById(id).value = '';
+                    });
+                    // 重新加载模型列表
+                    loadDramaModels();
+                } else {
+                    showToast('添加失败: ' + (data.error || ''), 'error');
+                }
+            } catch (e) {
+                showToast('添加失败: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteCustomModel(modelId) {
+            if (!confirm(`确定要删除模型 "${modelId}" 吗？`)) return;
+            try {
+                const resp = await fetch('/api/custom-models', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_id: modelId })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast('已删除', 'success');
+                    loadCustomModelsList();
+                    loadDramaModels();
+                } else {
+                    showToast('删除失败: ' + (data.error || ''), 'error');
+                }
+            } catch (e) {
+                showToast('删除失败: ' + e.message, 'error');
+            }
         }
 
         async function saveApiKey() {
@@ -1582,6 +1718,237 @@
             }
         }
 
+        async function resumeDrama() {
+            const btn = document.getElementById('dramaResumeBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ 正在恢复...';
+            try {
+                const resp = await fetch('/api/drama/resume', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ drama_id: currentDramaId })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    document.getElementById('dramaResumeSection').style.display = 'none';
+                    showToast('已确认，开始生成视频...', 'success');
+                } else {
+                    showToast('恢复失败: ' + (data.error || ''), 'error');
+                    btn.disabled = false;
+                    btn.textContent = '✅ 确认并继续生成视频';
+                }
+            } catch (e) {
+                showToast('恢复失败: ' + e.message, 'error');
+                btn.disabled = false;
+                btn.textContent = '✅ 确认并继续生成视频';
+            }
+        }
+
+        async function confirmMerge(waitForRetry) {
+            const waitBtn = document.getElementById('dramaMergeWaitBtn');
+            const nowBtn = document.getElementById('dramaMergeNowBtn');
+            if (waitBtn) waitBtn.disabled = true;
+            if (nowBtn) nowBtn.disabled = true;
+
+            try {
+                const resp = await fetch('/api/drama/merge/confirm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ drama_id: currentDramaId, wait_for_retry: waitForRetry })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    if (waitForRetry) {
+                        showToast('正在等待失败镜头重新生成...', 'success');
+                    } else {
+                        showToast('开始合并已成功的镜头...', 'success');
+                    }
+                } else {
+                    showToast('确认失败: ' + (data.error || ''), 'error');
+                    if (waitBtn) waitBtn.disabled = false;
+                    if (nowBtn) nowBtn.disabled = false;
+                }
+            } catch (e) {
+                showToast('确认失败: ' + e.message, 'error');
+                if (waitBtn) waitBtn.disabled = false;
+                if (nowBtn) nowBtn.disabled = false;
+            }
+        }
+
+        async function replaceAssetImage(assetIndex, input) {
+                    const file = input.files[0];
+                    if (!file || !currentDramaId) return;
+        
+                    const formData = new FormData();
+                    formData.append('drama_id', currentDramaId);
+                    formData.append('asset_index', assetIndex);
+                    formData.append('file', file);
+        
+                    try {
+                        const resp = await fetch('/api/drama/asset/replace', { method: 'POST', body: formData });
+                        const data = await resp.json();
+                        if (data.success) {
+                            // 更新图片显示
+                            const imgEl = document.getElementById(`asset-img-${assetIndex}`);
+                            if (imgEl) {
+                                if (imgEl.tagName === 'IMG') {
+                                    imgEl.src = data.image_url + '?t=' + Date.now();
+                                } else {
+                                    const newImg = document.createElement('img');
+                                    newImg.src = data.image_url;
+                                    newImg.id = `asset-img-${assetIndex}`;
+                                    newImg.style.cssText = 'width:100%;height:160px;object-fit:cover;';
+                                    imgEl.replaceWith(newImg);
+                                }
+                            }
+                            showToast('参考图替换成功', 'success');
+                        } else {
+                            showToast('替换失败: ' + (data.error || '未知错误'), 'error');
+                        }
+                    } catch (e) {
+                        showToast('替换失败: ' + e.message, 'error');
+                    }
+                    input.value = '';
+                }
+
+        async function regenerateAssetImage(assetIndex) {
+            if (!currentDramaId) return;
+            const btn = document.getElementById(`asset-retry-${assetIndex}`);
+            if (btn) { btn.disabled = true; btn.textContent = '生成中...'; }
+
+            try {
+                const resp = await fetch('/api/drama/asset/regenerate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ drama_id: currentDramaId, asset_index: assetIndex })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    const imgEl = document.getElementById(`asset-img-${assetIndex}`);
+                    if (imgEl) {
+                        const newImg = document.createElement('img');
+                        newImg.src = data.image_url;
+                        newImg.id = `asset-img-${assetIndex}`;
+                        newImg.style.cssText = 'width:100%;height:160px;object-fit:cover;';
+                        imgEl.replaceWith(newImg);
+                    }
+                    if (btn) btn.style.display = 'none';
+                    // 更新提示词显示
+                    if (data.img_prompt) {
+                        const ta = document.getElementById(`asset-prompt-${assetIndex}`);
+                        if (ta) ta.value = data.img_prompt;
+                    }
+                    showToast('参考图重新生成成功', 'success');
+                } else {
+                    showToast('重新生成失败: ' + (data.error || ''), 'error');
+                    if (btn) { btn.disabled = false; btn.textContent = '重新生成'; }
+                }
+            } catch (e) {
+                showToast('重新生成失败: ' + e.message, 'error');
+                if (btn) { btn.disabled = false; btn.textContent = '重新生成'; }
+            }
+        }
+
+        function toggleAssetPrompt(idx) {
+            const area = document.getElementById(`asset-prompt-area-${idx}`);
+            if (area) {
+                area.style.display = area.style.display === 'none' ? 'block' : 'none';
+            }
+        }
+
+        async function regenerateWithPrompt(idx) {
+            if (!currentDramaId) return;
+            const ta = document.getElementById(`asset-prompt-${idx}`);
+            if (!ta || !ta.value.trim()) {
+                showToast('提示词不能为空', 'error');
+                return;
+            }
+            const customDesc = ta.value.trim();
+            // 禁用按钮
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '生成中...';
+
+            try {
+                const resp = await fetch('/api/drama/asset/regenerate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        drama_id: currentDramaId,
+                        asset_index: idx,
+                        custom_desc: customDesc
+                    })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    const imgEl = document.getElementById(`asset-img-${idx}`);
+                    if (imgEl) {
+                        const newImg = document.createElement('img');
+                        newImg.src = data.image_url + '?t=' + Date.now();
+                        newImg.id = `asset-img-${idx}`;
+                        newImg.style.cssText = 'width:100%;height:160px;object-fit:cover;';
+                        imgEl.replaceWith(newImg);
+                    }
+                    // 更新提示词显示
+                    if (data.desc) {
+                        ta.value = data.desc;
+                    }
+                    showToast('参考图已按新提示词重新生成', 'success');
+                } else {
+                    showToast('重新生成失败: ' + (data.error || ''), 'error');
+                }
+            } catch (e) {
+                showToast('重新生成失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '✏️ 修改并重新生成';
+            }
+        }
+
+        async function regenerateShotVideo(shotIndex) {
+            if (!currentDramaId) return;
+            const btn = document.getElementById(`shot-retry-${shotIndex}`);
+            if (btn) { btn.disabled = true; btn.textContent = '提交中...'; }
+
+            try {
+                const resp = await fetch('/api/drama/shot/regenerate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ drama_id: currentDramaId, shot_index: shotIndex })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast(`镜头 ${shotIndex} 开始重新生成，请稍候刷新查看`, 'success');
+                    if (btn) btn.textContent = '生成中...';
+                    // 启动临时轮询更新该镜头状态
+                    const pollTimer = setInterval(async () => {
+                        try {
+                            const pollResp = await fetch(`/api/drama/status?drama_id=${currentDramaId}`);
+                            const pollData = await pollResp.json();
+                            if (pollData.video_results) {
+                                const shotResult = pollData.video_results.find(v => v.shot_index === shotIndex);
+                                if (shotResult && shotResult.status === 'completed') {
+                                    clearInterval(pollTimer);
+                                    showToast(`镜头 ${shotIndex} 重新生成完成`, 'success');
+                                    location.reload();
+                                } else if (shotResult && shotResult.status === 'failed') {
+                                    clearInterval(pollTimer);
+                                    showToast(`镜头 ${shotIndex} 重新生成失败`, 'error');
+                                    location.reload();
+                                }
+                            }
+                        } catch (e) { console.error(e); }
+                    }, 10000);
+                } else {
+                    showToast('重新生成失败: ' + (data.error || ''), 'error');
+                    if (btn) { btn.disabled = false; btn.textContent = '重新生成'; }
+                }
+            } catch (e) {
+                showToast('重新生成失败: ' + e.message, 'error');
+                if (btn) { btn.disabled = false; btn.textContent = '重新生成'; }
+            }
+        }
+
         async function startDrama() {
             const prompt = document.getElementById('dramaPrompt').value.trim();
             if (!prompt) { showToast('请输入短剧描述', 'error'); return; }
@@ -1597,8 +1964,11 @@
             // 重置进度显示
             document.getElementById('dramaProgress').style.display = 'block';
             document.getElementById('dramaScriptSection').style.display = 'none';
+            document.getElementById('dramaStorySection').style.display = 'none';
             document.getElementById('dramaStoryboardSection').style.display = 'none';
             document.getElementById('dramaAssetsSection').style.display = 'none';
+            document.getElementById('dramaResumeSection').style.display = 'none';
+            document.getElementById('dramaMergeConfirmSection').style.display = 'none';
             document.getElementById('dramaVideosSection').style.display = 'none';
             document.getElementById('dramaProgressBar').style.width = '5%';
             document.getElementById('dramaProgressBar').style.background = 'var(--accent)';
@@ -1639,24 +2009,53 @@
                 if (!data.success) return;
 
                 // 更新进度条
-                const stepMap = { 'step1': 15, 'step2': 35, 'step3': 55, 'step4': 75, 'merging': 90, 'completed': 100, 'failed': 100 };
+                const stepMap = { 'step1': 15, 'step2': 35, 'step3': 55, 'paused': 60, 'step4': 75, 'paused_merge': 85, 'waiting_retry': 88, 'merging': 90, 'completed': 100, 'failed': 100 };
                 const progress = stepMap[data.status] || 5;
                 document.getElementById('dramaProgressBar').style.width = progress + '%';
                 if (data.status === 'failed') document.getElementById('dramaProgressBar').style.background = 'var(--error)';
                 if (data.status === 'completed') document.getElementById('dramaProgressBar').style.background = 'var(--success)';
 
+                // 显示确认按钮
+                if (data.status === 'paused') {
+                    document.getElementById('dramaResumeSection').style.display = 'block';
+                } else {
+                    document.getElementById('dramaResumeSection').style.display = 'none';
+                }
+
+                // 显示合并确认按钮
+                if (data.status === 'paused_merge') {
+                    document.getElementById('dramaMergeConfirmSection').style.display = 'block';
+                    document.getElementById('dramaMergeConfirmMsg').textContent = '⏸ ' + (data.message || '部分镜头生成失败，是否等待重新生成后再合并？');
+                    document.getElementById('dramaMergeWaitBtn').disabled = false;
+                    document.getElementById('dramaMergeNowBtn').disabled = false;
+                } else if (data.status === 'waiting_retry') {
+                    document.getElementById('dramaMergeConfirmSection').style.display = 'block';
+                    document.getElementById('dramaMergeConfirmMsg').textContent = '⟳ ' + (data.message || '等待失败的镜头重新生成...');
+                    document.getElementById('dramaMergeWaitBtn').disabled = true;
+                    document.getElementById('dramaMergeNowBtn').disabled = true;
+                } else {
+                    document.getElementById('dramaMergeConfirmSection').style.display = 'none';
+                }
+
                 // 更新步骤标签
                 const stepLabels = {
-                    'pending': '等待中', 'step1': '① 生成剧本...', 'step2': '② 生成分镜...',
-                    'step3': '③ 提取素材...', 'step4': '④ 生成视频...', 'merging': '⑤ 拼接完整视频...', 'completed': '✅ 完成', 'failed': '❌ 失败'
+                    'pending': '等待中', 'step1': '① 生成故事+剧本...', 'step2': '② 生成分镜...',
+                    'step3': '③ 提取素材...', 'paused': '⏸ 请确认参考图', 'step4': '④ 生成视频...', 'paused_merge': '⏸ 镜头合并确认', 'waiting_retry': '⟳ 等待失败镜头重试', 'merging': '⑤ 拼接完整视频...', 'completed': '✅ 完成', 'failed': '❌ 失败'
                 };
                 document.getElementById('dramaStepBadge').textContent = stepLabels[data.status] || data.status;
                 document.getElementById('dramaMessage').textContent = data.message || '';
 
-                // 显示剧本
+                // 显示故事
+                if (data.story) {
+                    document.getElementById('dramaStorySection').style.display = 'block';
+                    document.getElementById('dramaStoryContent').textContent = data.story;
+                }
+
+                // 显示剧本（现在是纯文本格式）
                 if (data.script) {
                     document.getElementById('dramaScriptSection').style.display = 'block';
-                    document.getElementById('dramaScriptContent').textContent = JSON.stringify(data.script, null, 2);
+                    const scriptText = typeof data.script === 'string' ? data.script : JSON.stringify(data.script, null, 2);
+                    document.getElementById('dramaScriptContent').textContent = scriptText;
                 }
 
                 // 显示分镜
@@ -1676,14 +2075,42 @@
                 if (data.assets && data.assets.length > 0) {
                     document.getElementById('dramaAssetsSection').style.display = 'block';
                     const el = document.getElementById('dramaAssetsContent');
-                    el.innerHTML = data.assets.map(a => {
+                    const isGenerating = data.status === 'step3'; // Step 3 还在生成中
+                    el.innerHTML = data.assets.map((a, idx) => {
                         const catLabel = { characters: '角色', scenes: '场景', props: '道具' }[a.category] || a.category;
                         const imgSrc = a.local_file ? `/dramas/${currentDramaId}/images/${a.local_file}` : (a.image_url || '');
+                        const hasImage = !!imgSrc;
+                        const imgPrompt = (a.desc || a.img_prompt || '').replace(/"/g, '&quot;');
+                        // 只有在 Step 3 完成后（非生成中）且无图片时才显示失败和重试
+                        const isFailed = !hasImage && !isGenerating;
+                        const retryBtn = isFailed ? `<button style="font-size:11px;color:#fff;background:var(--error);border:none;border-radius:4px;padding:2px 8px;cursor:pointer;" onclick="regenerateAssetImage(${idx})" id="asset-retry-${idx}">重新生成</button>` : '';
+                        let imgHtml;
+                        if (hasImage) {
+                            imgHtml = `<img src="${imgSrc}" style="width:100%;height:160px;object-fit:cover;" alt="${a.name}" id="asset-img-${idx}">`;
+                        } else if (isGenerating) {
+                            imgHtml = `<div style="height:160px;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:12px;" id="asset-img-${idx}"><span class="loading-spinner" style="margin-right:6px;"></span>生成中...</div>`;
+                        } else {
+                            imgHtml = `<div style="height:160px;display:flex;align-items:center;justify-content:center;color:var(--error);font-size:12px;" id="asset-img-${idx}">❌ 生成失败</div>`;
+                        }
                         return `
-                            <div style="background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border);overflow:hidden;">
-                                ${imgSrc ? `<img src="${imgSrc}" style="width:100%;height:160px;object-fit:cover;" alt="${a.name}">` : '<div style="height:160px;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:12px;">生成中...</div>'}
+                            <div style="background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border);overflow:hidden;position:relative;" id="asset-card-${idx}">
+                                ${imgHtml}
                                 <div style="padding:8px;">
-                                    <div style="font-size:12px;font-weight:600;">${a.name} <span style="font-size:10px;color:var(--accent);">[${catLabel}]</span></div>
+                                    <div style="font-size:12px;font-weight:600;display:flex;justify-content:space-between;align-items:center;">
+                                        <span>${a.name} <span style="font-size:10px;color:var(--accent);">[${catLabel}]</span></span>
+                                        <div style="display:flex;gap:4px;">
+                                            ${retryBtn}
+                                            <label style="cursor:pointer;font-size:11px;color:var(--accent);font-weight:400;padding:2px 6px;border:1px solid var(--accent);border-radius:4px;" onclick="document.getElementById('asset-file-${idx}').click()">替换</label>
+                                            <input type="file" id="asset-file-${idx}" accept="image/*" style="display:none;" onchange="replaceAssetImage(${idx}, this)">
+                                        </div>
+                                    </div>
+                                    <div style="margin-top:6px;">
+                                        <button onclick="toggleAssetPrompt(${idx})" style="font-size:10px;color:var(--text2);background:none;border:1px solid var(--border);border-radius:3px;padding:1px 6px;cursor:pointer;">📝 提示词</button>
+                                        <div id="asset-prompt-area-${idx}" style="display:none;margin-top:4px;">
+                                            <textarea id="asset-prompt-${idx}" style="width:100%;height:80px;font-size:10px;font-family:monospace;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px;resize:vertical;">${imgPrompt}</textarea>
+                                            <button onclick="regenerateWithPrompt(${idx})" style="font-size:10px;color:#fff;background:var(--accent);border:none;border-radius:3px;padding:2px 8px;cursor:pointer;margin-top:3px;">✏️ 修改并重新生成</button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         `;
@@ -1725,9 +2152,16 @@
                             `;
                         } else if (v.status === 'failed') {
                             return `
-                                <div style="background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border);padding:12px;">
+                                <div style="background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border);padding:12px;" id="shot-result-${v.shot_index}">
                                     <div style="font-size:13px;font-weight:600;margin-bottom:4px;">镜头 ${v.shot_index} <span style="color:var(--error);font-size:11px;">✗ 失败</span></div>
-                                    <div style="font-size:11px;color:var(--error);">${v.error || ''}</div>
+                                    <div style="font-size:11px;color:var(--error);margin-bottom:8px;">${v.error || ''}</div>
+                                    <button style="font-size:11px;color:#fff;background:var(--error);border:none;border-radius:4px;padding:4px 12px;cursor:pointer;" onclick="regenerateShotVideo(${v.shot_index})" id="shot-retry-${v.shot_index}">重新生成</button>
+                                </div>
+                            `;
+                        } else if (v.status === 'generating') {
+                            return `
+                                <div style="background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border);padding:12px;" id="shot-result-${v.shot_index}">
+                                    <div style="font-size:13px;">镜头 ${v.shot_index} <span style="color:var(--accent);font-size:11px;">⟳ 重新生成中...</span></div>
                                 </div>
                             `;
                         } else {

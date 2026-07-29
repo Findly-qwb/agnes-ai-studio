@@ -9,11 +9,12 @@ from .config import get_app_dir
 
 # ---------- 模型选项 ----------
 TEXT_MODEL_OPTIONS = {
-    'deepseek-v4-flash': 'DeepSeek V4 Flash (推荐)',
+    'agnes-2.5-flash': 'Agnes 2.5 Flash (推荐，免费)',
+    'agnes-2.0-flash': 'Agnes 2.0 Flash',
+    'agnes-1.5-flash': 'Agnes 1.5 Flash (低延迟)',
+    'deepseek-v4-flash': 'DeepSeek V4 Flash',
     'deepseek-chat': 'DeepSeek Chat',
     'deepseek-reasoner': 'DeepSeek Reasoner',
-    'gpt-4o-mini': 'GPT-4o Mini',
-    'gpt-4o': 'GPT-4o',
     'qwen-turbo': 'Qwen Turbo',
     'qwen-plus': 'Qwen Plus',
     'doubao-pro-32k': '豆包 Pro 32K',
@@ -32,7 +33,7 @@ VIDEO_MODEL_OPTIONS = {
     'doubao-seaweed-t2v': '豆包 Seaweed T2V',
     'qwen-video-gen': 'Qwen Video Gen',
 }
-DEFAULT_TEXT_MODEL = 'deepseek-v4-flash'
+DEFAULT_TEXT_MODEL = 'agnes-2.5-flash'
 DEFAULT_IMAGE_MODEL = 'agnes-image-2.1-flash'
 DEFAULT_VIDEO_MODEL = 'agnes-video-v2.0'
 

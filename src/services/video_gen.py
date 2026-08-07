@@ -14,6 +14,86 @@ from ..config import get_app_dir, get_vendor_base_url, BASE_URL, shutdown_event
 from ..models import video_tasks, task_lock
 
 
+def download_video_by_video_id(video_id, base_url, headers, subdir, prefix):
+    """通过 video_id 使用 /agnesapi 端点下载视频
+    
+    Args:
+        video_id: 视频 ID
+        base_url: API Base URL
+        headers: 请求头
+        subdir: 保存子目录
+        prefix: 文件名前缀
+    
+    Returns:
+        保存后的文件名，失败返回 None
+    """
+    try:
+        print(f"[视频下载] 通过 video_id 获取视频: {video_id[:50]}...")
+        # 尝试新端点 /agnesapi?video_id=<VIDEO_ID>
+        agnesapi_url = f'{base_url}/agnesapi'
+        resp = requests.get(agnesapi_url, headers=headers, params={'video_id': video_id}, timeout=(30, 120), stream=True)
+        
+        if resp.status_code == 200:
+            content_type = resp.headers.get('Content-Type', '')
+            # 如果返回的是直接的视频流
+            if 'video' in content_type or 'octet-stream' in content_type:
+                return _save_stream_to_file(resp, subdir, prefix)
+            # 如果返回的是 JSON（包含下载 URL）
+            try:
+                data = resp.json()
+                url = (data.get('url', '') or data.get('video_url', '') or 
+                       data.get('video', '') or data.get('output_url', ''))
+                if isinstance(data.get('data'), dict):
+                    url = url or data['data'].get('url', '') or data['data'].get('video_url', '')
+                if url:
+                    print(f"[视频下载] agnesapi 返回 URL: {url[:150]}...")
+                    return download_and_save_file(url, subdir, prefix, 'mp4')
+                # 可能 data 本身就是视频数据（base64）
+                if data.get('data') and isinstance(data['data'], str) and len(data['data']) > 1000:
+                    import base64
+                    app_dir = get_app_dir()
+                    target_dir = os.path.join(app_dir, subdir)
+                    os.makedirs(target_dir, exist_ok=True)
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    short_uuid = uuid.uuid4().hex[:8]
+                    filename = f"{prefix}_{timestamp}_{short_uuid}.mp4"
+                    filepath = os.path.join(target_dir, filename)
+                    with open(filepath, 'wb') as f:
+                        f.write(base64.b64decode(data['data']))
+                    file_size = os.path.getsize(filepath)
+                    if file_size > 1000:
+                        print(f"[保存成功] {subdir}/{filename} ({file_size // 1024}KB)")
+                        return filename
+            except (json.JSONDecodeError, ValueError):
+                pass
+        else:
+            print(f"[视频下载] agnesapi 端点返回 {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        print(f"[视频下载] agnesapi 端点异常: {type(e).__name__}: {e}")
+    return None
+
+
+def _save_stream_to_file(resp, subdir, prefix):
+    """将流式响应保存为文件"""
+    app_dir = get_app_dir()
+    target_dir = os.path.join(app_dir, subdir)
+    os.makedirs(target_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    short_uuid = uuid.uuid4().hex[:8]
+    filename = f"{prefix}_{timestamp}_{short_uuid}.mp4"
+    filepath = os.path.join(target_dir, filename)
+    with open(filepath, 'wb') as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+    file_size = os.path.getsize(filepath)
+    if file_size > 1000:
+        print(f"[保存成功] {subdir}/{filename} ({file_size // 1024}KB)")
+        return filename
+    else:
+        os.remove(filepath)
+        return None
+
+
 def download_and_save_file(url, subdir, prefix, ext, max_retries=3):
     """从 URL 下载文件并保存到本地目录（支持重试）
     
@@ -156,6 +236,13 @@ def poll_video_status(task_id, api_key, model=None):
                             if video_url:
                                 local_filename = download_and_save_file(
                                     video_url, 'videos', 'video', 'mp4'
+                                )
+                            elif result.get('video_id'):
+                                # 新 API 格式：通过 video_id 下载
+                                video_id = result['video_id']
+                                print(f"[视频下载] 使用 video_id: {video_id[:50]}...")
+                                local_filename = download_video_by_video_id(
+                                    video_id, base_url, headers, 'videos', 'video'
                                 )
 
                             video_tasks[task_id]['result'] = {

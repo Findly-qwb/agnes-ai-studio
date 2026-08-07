@@ -22,9 +22,10 @@ from ..models import (
 from ..services.text_model import (
     call_text_model, parse_json_from_text,
     story_system_prompt, script_system_prompt, storyboard_system_prompt, assets_system_prompt,
-    build_video_prompt, sanitize_image_prompt
+    build_video_prompt, sanitize_image_prompt,
+    translate_cn_to_en, is_mostly_chinese
 )
-from ..services.video_gen import download_and_save_file
+from ..services.video_gen import download_and_save_file, download_video_by_video_id
 from ..services.video_merge import merge_videos, burn_chinese_subtitle
 
 
@@ -108,6 +109,8 @@ drama_bp = Blueprint('drama', __name__)
 drama_pause_events = {}
 # 合并前确认事件：用于 Step 4 完成后等待用户确认是否等待失败镜头
 drama_merge_pause_events = {}
+# 故事编辑确认事件：用于 Step 1a 完成后等待用户确认/编辑故事
+drama_story_edit_events = {}
 # 素材重生成跟踪：drama_id -> {asset_index: threading.Event}
 drama_asset_regen_events = {}
 
@@ -142,11 +145,35 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
                 text_api_key,
                 model=text_model
             )
-            _update(story=story_text, message='故事梗概完成，正在生成剧本...')
+            _update(story=story_text, message='故事梗概完成')
             print(f"[短剧 {drama_id}] 故事: {story_text[:200]}...")
         except Exception as e:
             _update(status='failed', message=f'故事生成失败: {e}')
             return
+
+        # ---- Step 1a 完成，暂停让用户确认/编辑故事梗概 ----
+        _update(status='paused_story', step='paused_story',
+                message='故事梗概已生成，您可以编辑后确认，或直接继续。等待 3 分钟未确认将自动继续')
+        print(f"[短剧 {drama_id}] Step 1a 完成，暂停等待用户确认故事（3分钟超时）...")
+
+        story_edit_event = drama_story_edit_events.get(drama_id)
+        if story_edit_event:
+            story_edit_event.clear()
+            confirmed = story_edit_event.wait(timeout=180)  # 等待 3 分钟
+            if not confirmed:
+                print(f"[短剧 {drama_id}] 故事确认超时(3分钟)，自动继续生成剧本")
+                _update(message='故事确认超时，自动继续生成剧本...')
+            else:
+                # 检查用户是否编辑了故事
+                with drama_lock:
+                    edited_story = drama_tasks[drama_id].get('edited_story', '')
+                if edited_story:
+                    story_text = edited_story
+                    _update(story=story_text)
+                    print(f"[短剧 {drama_id}] 用户编辑了故事，使用编辑后版本")
+                else:
+                    print(f"[短剧 {drama_id}] 用户确认故事，继续生成剧本")
+        if _is_shutdown(): return
 
         # ---- Step 1b: 生成专业剧本 ----
         print(f"[短剧 {drama_id}] Step 1b: 生成专业剧本...")
@@ -375,6 +402,7 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
         shot_duration_to_frames = {5: 121, 10: 241, 18: 441}
         num_frames = shot_duration_to_frames.get(shot_duration, 121)
         video_results = []
+        preferred_dl_method = None  # 记录首个成功的下载方式: 'direct_url' / 'content_endpoint' / 'video_id'
 
         for shot_idx, shot in enumerate(shots):
             if _is_shutdown(): return
@@ -418,7 +446,27 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
                         shot_asset_list.append(asset)
                         break
 
-            video_prompt = build_video_prompt(shot, shot_asset_list)
+            video_prompt_en, video_prompt_cn = build_video_prompt(shot, shot_asset_list)
+            video_prompt = video_prompt_en  # 发给模型的英文提示词
+            shot_ref_images = []
+            for a in shot_asset_list:
+                if a.get('image_url'):
+                    local_file = a.get('local_file', '')
+                    shot_ref_images.append({
+                        'asset_name': a.get('name', ''),
+                        'category': a.get('category', ''),
+                        'image_url': a['image_url'],
+                        'local_file': local_file
+                    })
+            with drama_lock:
+                if 'shot_details' not in drama_tasks[drama_id]:
+                    drama_tasks[drama_id]['shot_details'] = {}
+                drama_tasks[drama_id]['shot_details'][shot.get('shot_index', shot_idx+1)] = {
+                    'video_prompt': video_prompt_en,
+                    'video_prompt_cn': video_prompt_cn,
+                    'reference_images': shot_ref_images,
+                    'primary_image': primary_image
+                }
 
             try:
                 video_model = drama_tasks[drama_id].get('video_model', DEFAULT_VIDEO_MODEL)
@@ -493,27 +541,84 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
                                     v_url = meta.get('video_url', '') or meta.get('url', '') or meta.get('output_url', '')
                                     if not v_url and isinstance(meta.get('size_mapping'), dict):
                                         v_url = meta['size_mapping'].get('video_url', '') or meta['size_mapping'].get('url', '')
-                                if not v_url:
+                                # 新 API 格式：通过 video_id 下载
+                                v_video_id = pr_data.get('video_id', '')
+                                local_fn = None
+                                dl_method_used = None
+                                download_url = v_url  # 最终用于下载的 URL
+                                download_method_candidate = 'direct_url' if v_url else None  # 当前 URL 来源
+
+                                # === 第一步：确定下载方式和数据源 ===
+                                if preferred_dl_method == 'video_id' and v_video_id:
+                                    # 首选 video_id 方式
+                                    print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 使用首选方式 video_id 下载...")
+                                    local_fn = download_video_by_video_id(
+                                        v_video_id, vid_base_url, headers,
+                                        f'dramas/{drama_id}/videos', f'shot_{shot_idx}'
+                                    )
+                                    if local_fn:
+                                        dl_method_used = 'video_id'
+
+                                elif preferred_dl_method == 'content_endpoint' and not v_url:
+                                    # 首选 content 端点方式
+                                    print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 使用首选方式 content 端点下载...")
                                     try:
                                         content_resp = requests.get(f'{vid_base_url}/videos/{vtask_id}/content', headers=headers, timeout=30)
                                         if content_resp.status_code == 200:
                                             content_data = content_resp.json()
-                                            v_url = content_data.get('url', '') or content_data.get('video_url', '') or content_data.get('video', '')
-                                            if not v_url and isinstance(content_data.get('data'), dict):
-                                                v_url = content_data['data'].get('url', '') or content_data['data'].get('video_url', '')
-                                            print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 通过 content 端点获取URL: {v_url[:150] if v_url else '(无)'}")
-                                    except Exception as e2:
-                                        print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} content 端点请求失败: {e2}")
-                                local_fn = None
-                                if v_url:
-                                    print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 视频URL: {v_url[:150]}...")
+                                            c_url = content_data.get('url', '') or content_data.get('video_url', '') or content_data.get('video', '')
+                                            if not c_url and isinstance(content_data.get('data'), dict):
+                                                c_url = content_data['data'].get('url', '') or content_data['data'].get('video_url', '')
+                                            if c_url:
+                                                download_url = c_url
+                                                download_method_candidate = 'content_endpoint'
+                                    except Exception as ce:
+                                        print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} content 端点首选方式失败: {ce}")
+
+                                # === 第二步：如果有 URL 则下载 ===
+                                if not local_fn and not dl_method_used and download_url:
+                                    print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 视频URL({download_method_candidate}): {download_url[:150]}...")
                                     print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 开始下载视频...")
                                     try:
-                                        local_fn = download_and_save_file(v_url, f'dramas/{drama_id}/videos', f'shot_{shot_idx}', 'mp4')
+                                        local_fn = download_and_save_file(download_url, f'dramas/{drama_id}/videos', f'shot_{shot_idx}', 'mp4')
+                                        if local_fn:
+                                            dl_method_used = download_method_candidate
                                     except Exception as dl_err:
                                         print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 下载异常: {type(dl_err).__name__}: {dl_err}")
-                                else:
-                                    print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 警告: 未提取到视频URL")
+
+                                # === 第三步：回退到 content 端点 ===
+                                if not local_fn and not dl_method_used and preferred_dl_method != 'content_endpoint':
+                                    try:
+                                        content_resp = requests.get(f'{vid_base_url}/videos/{vtask_id}/content', headers=headers, timeout=30)
+                                        if content_resp.status_code == 200:
+                                            content_data = content_resp.json()
+                                            c_url = content_data.get('url', '') or content_data.get('video_url', '') or content_data.get('video', '')
+                                            if not c_url and isinstance(content_data.get('data'), dict):
+                                                c_url = content_data['data'].get('url', '') or content_data['data'].get('video_url', '')
+                                            if c_url:
+                                                print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 回退 content 端点获取URL: {c_url[:150]}")
+                                                local_fn = download_and_save_file(c_url, f'dramas/{drama_id}/videos', f'shot_{shot_idx}', 'mp4')
+                                                if local_fn:
+                                                    dl_method_used = 'content_endpoint'
+                                    except Exception as ce2:
+                                        print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} content 端点请求失败: {ce2}")
+
+                                # === 第四步：回退到 video_id ===
+                                if not local_fn and not dl_method_used and v_video_id:
+                                    print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 回退 video_id 下载: {v_video_id[:50]}...")
+                                    local_fn = download_video_by_video_id(
+                                        v_video_id, vid_base_url, headers,
+                                        f'dramas/{drama_id}/videos', f'shot_{shot_idx}'
+                                    )
+                                    if local_fn:
+                                        dl_method_used = 'video_id'
+
+                                # === 记录首个成功的下载方式 ===
+                                if dl_method_used and not preferred_dl_method:
+                                    preferred_dl_method = dl_method_used
+                                    print(f"[短剧 {drama_id}] 记录首选下载方式: {preferred_dl_method}")
+                                elif dl_method_used and dl_method_used != preferred_dl_method:
+                                    print(f"[短剧 {drama_id}] 镜头 {shot_idx+1} 使用备选方式 {dl_method_used} 下载成功（首选: {preferred_dl_method}）")
                                 if local_fn:
                                     # 烧录中文字幕（如果有对话）
                                     dialogue = shot.get('dialogue', '')
@@ -566,54 +671,57 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
             with drama_lock:
                 drama_tasks[drama_id]['video_results'] = list(video_results)
 
-        # ---- Step 4 完成，检查是否有失败镜头，暂停询问用户 ----
+        # ---- Step 4 完成，始终暂停让用户确认是否需要重新生成 ----
         failed_shots = [v for v in video_results if v.get('status') == 'failed']
         completed_count = sum(1 for v in video_results if v["status"] == "completed")
         
         if failed_shots:
-            _update(status='paused_merge', step='paused_merge',
-                message=f'{len(failed_shots)} 个镜头生成失败，{completed_count} 个成功。请点击「等待并重试」或「直接合并」')
-            print(f"[短剧 {drama_id}] Step 4 完成，{len(failed_shots)} 个镜头失败，暂停等待用户决定...")
+            pause_msg = f'{completed_count} 个镜头成功，{len(failed_shots)} 个失败。请确认是否需要重新生成，或点击「直接合并」'
+        else:
+            pause_msg = f'全部 {completed_count} 个镜头生成完成。请确认是否有需要重新生成的镜头，或点击「开始合并」'
+        
+        _update(status='paused_merge', step='paused_merge', message=pause_msg)
+        print(f"[短剧 {drama_id}] Step 4 完成，暂停等待用户确认（5分钟超时）...")
+        
+        merge_pause_event = drama_merge_pause_events.get(drama_id)
+        if merge_pause_event:
+            merge_pause_event.clear()
+            confirmed = merge_pause_event.wait(timeout=300)  # 等待 5 分钟
+            if not confirmed:
+                print(f"[短剧 {drama_id}] 合并确认超时(5分钟)，自动开始合并")
+                _update(message='确认超时，自动开始合并...')
+        if _is_shutdown(): return
+        
+        # 检查是否需要等待重试失败的镜头
+        with drama_lock:
+            wait_for_retry = drama_tasks[drama_id].get('wait_for_failed_shots', False)
+        
+        if wait_for_retry and failed_shots:
+            _update(status='waiting_retry', step='waiting_retry', message='等待失败的镜头重新生成...')
+            print(f"[短剧 {drama_id}] 用户选择等待失败镜头重试...")
             
-            merge_pause_event = drama_merge_pause_events.get(drama_id)
-            if merge_pause_event:
-                merge_pause_event.clear()
-                confirmed = merge_pause_event.wait(timeout=600)  # 最多等待 10 分钟
-                if not confirmed:
-                    print(f"[短剧 {drama_id}] 合并确认超时，直接合并已成功的镜头")
-                    _update(message='确认超时，直接合并已成功的镜头...')
-            if _is_shutdown(): return
-            
-            # 检查是否需要等待重试失败的镜头
-            with drama_lock:
-                wait_for_retry = drama_tasks[drama_id].get('wait_for_failed_shots', False)
-            
-            if wait_for_retry:
-                _update(status='waiting_retry', step='waiting_retry', message='等待失败的镜头重新生成...')
-                print(f"[短剧 {drama_id}] 用户选择等待失败镜头重试...")
-                
-                # 轮询等待所有失败的镜头变为 completed
-                for wait_i in range(120):  # 最多等待 20 分钟
-                    time.sleep(10)
-                    with drama_lock:
-                        current_results = drama_tasks[drama_id].get('video_results', [])
-                        still_failed = [v for v in current_results if v.get('status') == 'failed']
-                        all_done = len(still_failed) == 0
-                    if all_done:
-                        print(f"[短剧 {drama_id}] 所有失败镜头已重新生成完成")
-                        _update(message='所有镜头生成完成，开始合并...')
-                        video_results = list(current_results)
-                        break
-                    if wait_i % 3 == 0:
-                        _update(message=f'等待 {len(still_failed)} 个失败镜头重新生成中...')
-                else:
-                    print(f"[短剧 {drama_id}] 等待失败镜头重试超时，直接合并已成功的")
-                    with drama_lock:
-                        video_results = list(drama_tasks[drama_id].get('video_results', []))
+            # 轮询等待所有失败的镜头变为 completed
+            for wait_i in range(120):  # 最多等待 20 分钟
+                time.sleep(10)
+                with drama_lock:
+                    current_results = drama_tasks[drama_id].get('video_results', [])
+                    still_failed = [v for v in current_results if v.get('status') == 'failed']
+                    all_done = len(still_failed) == 0
+                if all_done:
+                    print(f"[短剧 {drama_id}] 所有失败镜头已重新生成完成")
+                    _update(message='所有镜头生成完成，开始合并...')
+                    video_results = list(current_results)
+                    break
+                if wait_i % 3 == 0:
+                    _update(message=f'等待 {len(still_failed)} 个失败镜头重新生成中...')
             else:
-                print(f"[短剧 {drama_id}] 用户选择直接合并")
+                print(f"[短剧 {drama_id}] 等待失败镜头重试超时，直接合并已成功的")
                 with drama_lock:
                     video_results = list(drama_tasks[drama_id].get('video_results', []))
+        else:
+            print(f"[短剧 {drama_id}] 用户确认开始合并")
+            with drama_lock:
+                video_results = list(drama_tasks[drama_id].get('video_results', []))
         
         # ---- Step 5: 拼接所有镜头视频 ----
         completed_count = sum(1 for v in video_results if v["status"] == "completed")
@@ -663,12 +771,13 @@ def drama_start():
             'text_model': text_model, 'image_model': image_model, 'video_model': video_model,
             'text_api_key': text_api_key,
             'script': None, 'story': None, 'storyboard': None, 'shots': [],
-            'assets': [], 'video_results': [],
-            'wait_for_failed_shots': False,
+            'assets': [], 'video_results': [], 'shot_details': {},
+            'wait_for_failed_shots': False, 'edited_story': '',
             'message': '正在启动...', 'created_at': time.time()
         }
         drama_pause_events[drama_id] = threading.Event()
         drama_merge_pause_events[drama_id] = threading.Event()
+        drama_story_edit_events[drama_id] = threading.Event()
         drama_asset_regen_events[drama_id] = {}
 
     thread = threading.Thread(target=drama_pipeline, args=(drama_id, api_key, text_api_key), daemon=True)
@@ -699,6 +808,34 @@ def drama_resume():
     return jsonify({'success': True, 'message': '已确认，继续生成视频...'})
 
 
+@drama_bp.route('/api/drama/story/confirm', methods=['POST'])
+def drama_story_confirm():
+    """用户确认或编辑故事梗概后恢复流水线"""
+    data = request.get_json()
+    drama_id = data.get('drama_id')
+    edited_story = data.get('edited_story', '').strip()
+    if not drama_id:
+        return jsonify({'success': False, 'error': '缺少 drama_id'}), 400
+
+    story_edit_event = drama_story_edit_events.get(drama_id)
+    if not story_edit_event:
+        return jsonify({'success': False, 'error': '任务不存在或无需确认'}), 404
+
+    with drama_lock:
+        drama = drama_tasks.get(drama_id)
+        if not drama or drama.get('status') != 'paused_story':
+            return jsonify({'success': False, 'error': '当前状态无需确认'}), 400
+        # 如果用户编辑了故事，保存编辑后的版本
+        if edited_story:
+            drama['edited_story'] = edited_story
+            print(f"[短剧 {drama_id}] 用户编辑了故事梗概 ({len(edited_story)} 字)")
+        else:
+            print(f"[短剧 {drama_id}] 用户确认原始故事梗概")
+
+    story_edit_event.set()
+    return jsonify({'success': True, 'message': '已确认，开始生成剧本...'})
+
+
 @drama_bp.route('/api/drama/merge/confirm', methods=['POST'])
 def drama_merge_confirm():
     """用户确认是否等待失败镜头重新生成后再合并"""
@@ -725,6 +862,55 @@ def drama_merge_confirm():
 
     merge_pause_event.set()
     return jsonify({'success': True, 'wait_for_retry': wait_for_retry})
+
+
+@drama_bp.route('/api/drama/merge/custom', methods=['POST'])
+def drama_merge_custom():
+    """用户自定义选择镜头顺序并合并为视频
+    
+    请求体:
+        drama_id: 短剧 ID
+        shot_indices: 镜头顺序列表 [1, 3, 2, 5] 表示按镜头1→3→2→5顺序合并
+        merge_name: 可选，合并视频名称前缀
+    """
+    data = request.get_json()
+    drama_id = data.get('drama_id')
+    shot_indices = data.get('shot_indices', [])
+    merge_name = data.get('merge_name', 'custom')
+    
+    if not drama_id or not shot_indices or len(shot_indices) < 2:
+        return jsonify({'success': False, 'error': '至少需要选择 2 个镜头'}), 400
+    
+    with drama_lock:
+        drama = drama_tasks.get(drama_id)
+        if not drama:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+        video_results = list(drama.get('video_results', []))
+    
+    # 验证所选镜头都存在且已完成
+    completed_shots = {v['shot_index'] for v in video_results if v.get('status') == 'completed' and v.get('local_file')}
+    valid_indices = [si for si in shot_indices if si in completed_shots]
+    if len(valid_indices) < 2:
+        return jsonify({'success': False, 'error': f'有效的已完成镜头不足 2 个（选了 {len(valid_indices)} 个）'}), 400
+    
+    # 执行合并
+    prefix = f'merge_{merge_name}' if merge_name != 'custom' else 'custom'
+    merged_file = merge_videos(drama_id, video_results, shot_order=valid_indices, output_prefix=prefix)
+    
+    if merged_file:
+        # 记录自定义合并结果
+        with drama_lock:
+            if 'custom_merges' not in drama_tasks[drama_id]:
+                drama_tasks[drama_id]['custom_merges'] = []
+            drama_tasks[drama_id]['custom_merges'].append({
+                'name': merge_name,
+                'shot_indices': valid_indices,
+                'merged_file': merged_file
+            })
+        print(f"[短剧 {drama_id}] 自定义合并成功: {merged_file} (镜头顺序: {valid_indices})")
+        return jsonify({'success': True, 'merged_file': merged_file, 'shot_indices': valid_indices})
+    else:
+        return jsonify({'success': False, 'error': '合并失败，请检查日志'}), 500
 
 
 @drama_bp.route('/api/drama/models', methods=['GET'])
@@ -770,8 +956,10 @@ def drama_status(drama_id):
             'story': drama.get('story'),
             'storyboard': drama.get('storyboard'),
             'assets': drama.get('assets', []),
+            'shot_details': drama.get('shot_details', {}),
             'video_results': drama.get('video_results', []),
             'merged_video': drama.get('merged_video'),
+            'custom_merges': drama.get('custom_merges', []),
             'shots_count': len(drama.get('shots', [])),
             'completed_shots': sum(1 for v in drama.get('video_results', []) if v.get('status') == 'completed'),
             'created_at': drama['created_at']
@@ -1002,12 +1190,108 @@ def drama_asset_regenerate():
         regen_event.set()
 
 
-@drama_bp.route('/api/drama/shot/regenerate', methods=['POST'])
-def drama_shot_regenerate():
-    """重新生成单个镜头视频（后台异步执行）"""
+@drama_bp.route('/api/drama/shot/upload_image', methods=['POST'])
+def drama_shot_upload_image():
+    """上传镜头自定义参考图，并添加到 shot_details 的参考图列表"""
+    drama_id = request.form.get('drama_id')
+    shot_index = request.form.get('shot_index')
+    if not drama_id or shot_index is None:
+        return jsonify({'success': False, 'error': '缺少 drama_id 或 shot_index'}), 400
+
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': '未上传文件'}), 400
+
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'success': False, 'error': '文件名为空'}), 400
+
+    shot_index = int(shot_index)
+    drama_base = ensure_drama_dirs(drama_id)
+    ext = os.path.splitext(file.filename)[1].lower() or '.png'
+    filename = f'shot_{shot_index}_ref_{uuid.uuid4().hex[:6]}{ext}'
+    filepath = os.path.join(drama_base, 'images', filename)
+    file.save(filepath)
+
+    image_url = f'/dramas/{drama_id}/images/{filename}'
+    print(f"[短剧 {drama_id}] 镜头 {shot_index} 上传自定义参考图: {filename}")
+
+    # 添加到 shot_details 的参考图列表
+    with drama_lock:
+        drama = drama_tasks.get(drama_id)
+        if drama:
+            if 'shot_details' not in drama:
+                drama['shot_details'] = {}
+            if shot_index not in drama['shot_details']:
+                drama['shot_details'][shot_index] = {'video_prompt': '', 'video_prompt_cn': '', 'reference_images': [], 'primary_image': None}
+            shot_detail = drama['shot_details'][shot_index]
+            # 添加新上传的参考图
+            new_img = {
+                'asset_name': f'自定义_{filename[:10]}',
+                'category': 'custom',
+                'image_url': image_url,
+                'local_file': filename
+            }
+            if 'reference_images' not in shot_detail:
+                shot_detail['reference_images'] = []
+            shot_detail['reference_images'].append(new_img)
+            # 如果没有主参考图，设为新上传的
+            if not shot_detail.get('primary_image'):
+                shot_detail['primary_image'] = image_url
+
+    return jsonify({
+        'success': True,
+        'image_url': image_url,
+        'filename': filename
+    })
+
+
+@drama_bp.route('/api/drama/shot/delete_image', methods=['POST'])
+def drama_shot_delete_image():
+    """删除镜头的某张参考图"""
     data = request.get_json()
     drama_id = data.get('drama_id')
     shot_index = data.get('shot_index')
+    image_index = data.get('image_index')  # 参考图在列表中的索引
+    if not drama_id or shot_index is None or image_index is None:
+        return jsonify({'success': False, 'error': '缺少参数'}), 400
+
+    shot_index = int(shot_index)
+    image_index = int(image_index)
+
+    with drama_lock:
+        drama = drama_tasks.get(drama_id)
+        if not drama:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+        shot_detail = drama.get('shot_details', {}).get(shot_index)
+        if not shot_detail:
+            return jsonify({'success': False, 'error': f'镜头 {shot_index} 无参考图信息'}), 404
+        ref_images = shot_detail.get('reference_images', [])
+        if image_index < 0 or image_index >= len(ref_images):
+            return jsonify({'success': False, 'error': f'图片索引 {image_index} 超出范围'}), 400
+
+        removed = ref_images.pop(image_index)
+        print(f"[短剧 {drama_id}] 镜头 {shot_index} 删除参考图: {removed.get('asset_name', '')}")
+
+        # 如果删除的是主参考图，更新为剩余第一张或 None
+        primary = shot_detail.get('primary_image', '')
+        if removed.get('image_url') == primary:
+            shot_detail['primary_image'] = ref_images[0].get('image_url', '') if ref_images else None
+
+    return jsonify({'success': True, 'remaining': len(ref_images)})
+
+
+@drama_bp.route('/api/drama/shot/regenerate', methods=['POST'])
+def drama_shot_regenerate():
+    """重新生成单个镜头视频（后台异步执行）
+    支持自定义参数:
+      - custom_prompt: 自定义视频提示词（覆盖自动生成）
+      - custom_images: 自定义参考图列表 [{"image_url": "..."}, ...]（覆盖自动匹配）
+    """
+    data = request.get_json()
+    drama_id = data.get('drama_id')
+    shot_index = data.get('shot_index')
+    custom_prompt = data.get('custom_prompt', '').strip() or None
+    custom_images = data.get('custom_images', None)  # list of {"image_url": "..."}
     if not drama_id or shot_index is None:
         return jsonify({'success': False, 'error': '缺少 drama_id 或 shot_index'}), 400
 
@@ -1042,10 +1326,10 @@ def drama_shot_regenerate():
             video_results[result_idx] = {'shot_index': shot_index, 'status': 'generating'}
             drama['video_results'] = list(video_results)
 
-    # 启动后台线程生成视频
+    # 启动后台线程生成视频（传入自定义参数）
     thread = threading.Thread(
         target=_regenerate_shot_video,
-        args=(drama_id, shot_index, target_shot, api_key, result_idx),
+        args=(drama_id, shot_index, target_shot, api_key, result_idx, custom_prompt, custom_images),
         daemon=True
     )
     thread.start()
@@ -1053,7 +1337,7 @@ def drama_shot_regenerate():
     return jsonify({'success': True, 'shot_index': shot_index, 'message': '开始重新生成'})
 
 
-def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx):
+def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx, custom_prompt=None, custom_images=None):
     """后台线程：重新生成单个镜头视频"""
     import json as _json
 
@@ -1067,27 +1351,60 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx):
     shot_duration_to_frames = {5: 121, 10: 241, 18: 441}
     num_frames = shot_duration_to_frames.get(shot_duration, 121)
 
-    shot_chars = [c.lower().strip() for c in shot.get('characters', [])]
-    shot_asset_list = []
-    primary_image = None
-
-    for asset in all_assets:
-        if not asset.get('image_url'):
-            continue
-        asset_name = asset.get('name', '').lower().strip()
-        if any(asset_name in c or c in asset_name for c in shot_chars):
-            shot_asset_list.append(asset)
-            if not primary_image:
-                primary_image = asset['image_url']
-
-    if not primary_image:
+    # 使用自定义参数或自动匹配
+    video_prompt_cn = ''
+    if custom_prompt:
+        # 如果是中文提示词，先翻译为英文再发给视频模型
+        if is_mostly_chinese(custom_prompt):
+            video_prompt = translate_cn_to_en(custom_prompt, drama.get('text_api_key', ''))
+            video_prompt_cn = custom_prompt
+            print(f"[镜头重生成] 镜头 {shot_index} 中文提示词已翻译为英文")
+        else:
+            video_prompt = custom_prompt
+            video_prompt_cn = custom_prompt
+        print(f"[镜头重生成] 镜头 {shot_index} 使用自定义提示词")
+    else:
+        shot_chars = [c.lower().strip() for c in shot.get('characters', [])]
+        shot_asset_list = []
         for asset in all_assets:
-            if asset.get('image_url') and asset.get('category') == 'characters':
-                primary_image = asset['image_url']
+            if not asset.get('image_url'):
+                continue
+            asset_name = asset.get('name', '').lower().strip()
+            if any(asset_name in c or c in asset_name for c in shot_chars):
                 shot_asset_list.append(asset)
-                break
+        video_prompt_en, video_prompt_cn = build_video_prompt(shot, shot_asset_list)
+        video_prompt = video_prompt_en
 
-    video_prompt = build_video_prompt(shot, shot_asset_list)
+    # 确定参考图：自定义列表 > 自动匹配
+    primary_image = None
+    if custom_images and len(custom_images) > 0:
+        primary_image = custom_images[0].get('image_url', '')
+        print(f"[镜头重生成] 镜头 {shot_index} 使用 {len(custom_images)} 张自定义参考图")
+    else:
+        shot_chars = [c.lower().strip() for c in shot.get('characters', [])]
+        for asset in all_assets:
+            if not asset.get('image_url'):
+                continue
+            asset_name = asset.get('name', '').lower().strip()
+            if any(asset_name in c or c in asset_name for c in shot_chars):
+                if not primary_image:
+                    primary_image = asset['image_url']
+        if not primary_image:
+            for asset in all_assets:
+                if asset.get('image_url') and asset.get('category') == 'characters':
+                    primary_image = asset['image_url']
+                    break
+
+    # 更新 shot_details 中的记录
+    with drama_lock:
+        if 'shot_details' not in drama:
+            drama['shot_details'] = {}
+        drama['shot_details'][shot_index] = {
+            'video_prompt': video_prompt,
+            'video_prompt_cn': video_prompt_cn,
+            'reference_images': custom_images or drama.get('shot_details', {}).get(shot_index, {}).get('reference_images', []),
+            'primary_image': primary_image
+        }
 
     try:
         video_model = drama.get('video_model', DEFAULT_VIDEO_MODEL)
@@ -1143,6 +1460,7 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx):
 
         # 轮询等待完成
         v_url = ''
+        v_video_id = ''
         for poll_i in range(120):
             time.sleep(10)
             try:
@@ -1152,10 +1470,15 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx):
                 pr_data = poll_resp.json()
                 v_status = pr_data.get('status', '')
                 if v_status == 'completed':
-                    content_data = pr_data.get('data', {}) or pr_data.get('content', {}) or {}
-                    v_url = content_data.get('url', '') or content_data.get('video_url', '')
-                    if not v_url and isinstance(content_data, dict):
-                        v_url = content_data.get('url', '') or content_data.get('video_url', '')
+                    # 提取视频 URL（多种字段兼容）
+                    v_url = (pr_data.get('video_url') or pr_data.get('url')
+                             or pr_data.get('output_url') or pr_data.get('video') or '')
+                    if not v_url and isinstance(pr_data.get('data'), dict):
+                        v_url = pr_data['data'].get('url', '') or pr_data['data'].get('video_url', '')
+                    if not v_url and isinstance(pr_data.get('remixed_from_video_id'), str) and pr_data['remixed_from_video_id'].startswith('http'):
+                        v_url = pr_data['remixed_from_video_id']
+                    # 提取 video_id（新 API 格式）
+                    v_video_id = pr_data.get('video_id', '')
                     break
                 elif v_status == 'failed':
                     with drama_lock:
@@ -1183,6 +1506,26 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx):
                 local_fn = download_and_save_file(v_url, f'dramas/{drama_id}/videos', f'shot_{shot_index}', 'mp4')
             except Exception as dl_err:
                 print(f"[镜头重生成] 镜头 {shot_index} 下载异常: {type(dl_err).__name__}: {dl_err}")
+        if not local_fn:
+            # 回退 content 端点
+            try:
+                content_resp = requests.get(f'{vid_base_url}/videos/{vtask_id}/content', headers=headers, timeout=30)
+                if content_resp.status_code == 200:
+                    content_data = content_resp.json()
+                    c_url = content_data.get('url', '') or content_data.get('video_url', '') or content_data.get('video', '')
+                    if not c_url and isinstance(content_data.get('data'), dict):
+                        c_url = content_data['data'].get('url', '') or content_data['data'].get('video_url', '')
+                    if c_url:
+                        print(f"[镜头重生成] 镜头 {shot_index} 通过 content 端点获取URL")
+                        local_fn = download_and_save_file(c_url, f'dramas/{drama_id}/videos', f'shot_{shot_index}', 'mp4')
+            except Exception as ce:
+                print(f"[镜头重生成] 镜头 {shot_index} content 端点请求失败: {ce}")
+        if not local_fn and v_video_id:
+            print(f"[镜头重生成] 镜头 {shot_index} 使用 video_id 下载: {v_video_id[:50]}...")
+            local_fn = download_video_by_video_id(
+                v_video_id, vid_base_url, headers,
+                f'dramas/{drama_id}/videos', f'shot_{shot_index}'
+            )
 
         if local_fn:
             # 烧录中文字幕（如果有对话）

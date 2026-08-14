@@ -1822,6 +1822,8 @@
         }
 
         // ========== 故事编辑功能 ==========
+        let storyConfirmed = false;  // 用户已确认故事，防止轮询重新显示确认弹窗
+
         function showStoryEdit() {
             const storyContent = document.getElementById('dramaStoryContent').textContent;
             const editArea = document.getElementById('dramaStoryEditArea');
@@ -1858,6 +1860,7 @@
                 });
                 const data = await resp.json();
                 if (data.success) {
+                    storyConfirmed = true;  // 标记已确认，防止轮询重新显示
                     document.getElementById('dramaStoryConfirmSection').style.display = 'none';
                     document.getElementById('dramaStoryEditPanel').style.display = 'none';
                     // 如果编辑了，更新显示的故事内容
@@ -2278,6 +2281,7 @@
             btn.innerHTML = '<span class="loading-spinner"></span> 启动中...';
 
             // 重置进度显示
+            storyConfirmed = false;
             document.getElementById('dramaProgress').style.display = 'block';
             document.getElementById('dramaScriptSection').style.display = 'none';
             document.getElementById('dramaStorySection').style.display = 'none';
@@ -2337,7 +2341,7 @@
                 if (data.status === 'completed') document.getElementById('dramaProgressBar').style.background = 'var(--success)';
 
                 // 显示故事确认按钮
-                if (data.status === 'paused_story') {
+                if (data.status === 'paused_story' && !storyConfirmed) {
                     document.getElementById('dramaStoryConfirmSection').style.display = 'block';
                     document.getElementById('dramaStoryDirectBtn').disabled = false;
                 } else {

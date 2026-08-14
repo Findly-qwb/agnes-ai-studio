@@ -831,6 +831,10 @@ def drama_story_confirm():
             print(f"[短剧 {drama_id}] 用户编辑了故事梗概 ({len(edited_story)} 字)")
         else:
             print(f"[短剧 {drama_id}] 用户确认原始故事梗概")
+        # 立即更新状态，防止轮询再次触发确认弹窗
+        drama['status'] = 'step1'
+        drama['step'] = 'step1'
+        drama['message'] = '故事已确认，正在生成剧本...'
 
     story_edit_event.set()
     return jsonify({'success': True, 'message': '已确认，开始生成剧本...'})

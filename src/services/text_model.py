@@ -152,6 +152,33 @@ def _repair_truncated_json(text):
             i += 1
             continue
     
+    # 辅助函数：根据未闭合的括号栈生成闭合字符串（逆序闭合）
+    def _closing_for_stack(stk):
+        return ''.join('}' if c == '{' else ']' for c in reversed(stk))
+    
+    # 辅助函数：重新计算给定文本的未闭合括号栈
+    def _unclosed_stack(txt):
+        stk = []
+        in_s = False
+        es = False
+        for c in txt:
+            if es:
+                es = False
+                continue
+            if c == '\\' and in_s:
+                es = True
+                continue
+            if c == '"':
+                in_s = not in_s
+                continue
+            if not in_s:
+                if c in '{[':
+                    stk.append(c)
+                elif c in '}]':
+                    if stk:
+                        stk.pop()
+        return stk
+    
     # 到达末尾，JSON 被截断
     # 尝试从最后完成的位置截断并闭合
     if last_complete_pos > 0:
@@ -161,28 +188,9 @@ def _repair_truncated_json(text):
             candidate = candidate[:-1]
         if candidate and candidate[-1] == ',':
             candidate = candidate[:-1]
-        # 闭合所有未闭合的括号
-        # 重新计算未闭合的括号
-        open_braces = 0
-        open_brackets = 0
-        in_str = False
-        esc = False
-        for c in candidate:
-            if esc:
-                esc = False
-                continue
-            if c == '\\' and in_str:
-                esc = True
-                continue
-            if c == '"':
-                in_str = not in_str
-                continue
-            if not in_str:
-                if c == '{': open_braces += 1
-                elif c == '}': open_braces -= 1
-                elif c == '[': open_brackets += 1
-                elif c == ']': open_brackets -= 1
-        candidate += '}' * max(0, open_braces) + ']' * max(0, open_brackets)
+        # 用栈计算未闭合的括号，逆序闭合
+        stk = _unclosed_stack(candidate)
+        candidate += _closing_for_stack(stk)
         try:
             result = json.loads(candidate)
             print(f"[JSON修复] 截断的 JSON 已自动修复（保留到位置 {last_complete_pos}）")
@@ -191,31 +199,17 @@ def _repair_truncated_json(text):
             pass
     
     # 如果上面的方法失败，尝试更激进的方法：直接在末尾闭合
-    # 先尝试关闭当前字符串
     candidate = text
     if in_string:
+        # 如果文本以未转义的反斜杠结尾（escape_next=True），
+        # 直接加 " 会被 \ 转义成 \"，字符串无法闭合
+        # 需要先加一个 \ 来转义前一个 \，再加 " 闭合字符串
+        if escape_next:
+            candidate += '\\'
         candidate += '"'
-    # 闭合所有括号
-    open_braces = 0
-    open_brackets = 0
-    in_str = False
-    esc = False
-    for c in candidate:
-        if esc:
-            esc = False
-            continue
-        if c == '\\' and in_str:
-            esc = True
-            continue
-        if c == '"':
-            in_str = not in_str
-            continue
-        if not in_str:
-            if c == '{': open_braces += 1
-            elif c == '}': open_braces -= 1
-            elif c == '[': open_brackets += 1
-            elif c == ']': open_brackets -= 1
-    candidate += '}' * max(0, open_braces) + ']' * max(0, open_brackets)
+    # 用栈计算未闭合的括号，逆序闭合
+    stk = _unclosed_stack(candidate)
+    candidate += _closing_for_stack(stk)
     try:
         result = json.loads(candidate)
         print(f"[JSON修复] 截断的 JSON 已激进修复")

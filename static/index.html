@@ -608,10 +608,16 @@
                     <div class="form-group">
                         <label class="form-label">输出尺寸</label>
                         <select class="form-select" id="img2imgSize">
-                            <option value="1024x768">1024 × 768</option>
-                            <option value="1024x1024">1024 × 1024</option>
-                            <option value="768x1024">768 × 1024</option>
+                            <option value="1024x1024">1:1 (1024 × 1024)</option>
+                            <option value="1344x768">16:9 (1344 × 768)</option>
+                            <option value="768x1344">9:16 (768 × 1344)</option>
+                            <option value="1024x768">4:3 (1024 × 768)</option>
+                            <option value="768x1024">3:4 (768 × 1024)</option>
                         </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">生图模型</label>
+                        <select class="form-select" id="img2imgModel"></select>
                     </div>
                 </div>
 
@@ -954,6 +960,20 @@
                 豆包、MiniMax、千问的生视频模型复用上方对应厂商的 API Key
             </div>
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px;">🦙 Ollama 本地模型</div>
+            <div class="form-hint" style="margin-bottom:8px;">
+                使用本地部署的 Ollama 模型（无需 API Key，需先安装 <a href="https://ollama.com" target="_blank" style="color:var(--accent);">ollama.com</a>）
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                    <input type="checkbox" id="ollamaEnabled" onchange="toggleOllamaSection()">
+                    启用 Ollama
+                </label>
+                <input type="text" class="form-input" id="ollamaBaseUrl" placeholder="http://localhost:11434" style="font-size:11px;flex:1;" disabled>
+                <button class="btn btn-sm" id="ollamaDetectBtn" onclick="detectOllamaModels()" style="font-size:11px;white-space:nowrap;" disabled>🔍 检测模型</button>
+            </div>
+            <div id="ollamaModelsResult" style="font-size:11px;color:var(--text2);margin-bottom:4px;"></div>
+            <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">
             <div style="font-size:13px;font-weight:600;margin-bottom:8px;">🔧 自定义模型</div>
             <div class="form-hint" style="margin-bottom:8px;">
                 添加自己的模型，需配置对应的 API 地址和 Key
@@ -1238,10 +1258,100 @@
                 if (data.qwen_api_key_masked) document.getElementById('qwenApiKeyInput').placeholder = `已配置: ${data.qwen_api_key_masked}`;
                 if (data.minimax_api_key_masked) document.getElementById('minimaxApiKeyInput').placeholder = `已配置: ${data.minimax_api_key_masked}`;
             }).catch(() => {});
+            // 加载 Ollama 配置
+            loadOllamaConfig();
         }
 
         function closeSettings() {
             document.getElementById('settingsModal').classList.remove('show');
+        }
+
+        // ==================== Ollama 本地模型 ====================
+        let ollamaDetectedModels = [];
+
+        async function loadOllamaConfig() {
+            try {
+                const resp = await fetch('/api/ollama/config');
+                const data = await resp.json();
+                if (data.success) {
+                    const cfg = data.config;
+                    document.getElementById('ollamaEnabled').checked = cfg.enabled || false;
+                    document.getElementById('ollamaBaseUrl').value = cfg.base_url || 'http://localhost:11434';
+                    toggleOllamaSection();
+                    if (cfg.enabled && cfg.models && cfg.models.length > 0) {
+                        ollamaDetectedModels = cfg.models;
+                        document.getElementById('ollamaModelsResult').innerHTML = 
+                            `<span style="color:var(--success);">✅ 已启用，检测到 ${cfg.models.length} 个模型: ${cfg.models.join(', ')}</span>`;
+                    }
+                }
+            } catch (e) {
+                console.error('加载 Ollama 配置失败:', e);
+            }
+        }
+
+        function toggleOllamaSection() {
+            const enabled = document.getElementById('ollamaEnabled').checked;
+            document.getElementById('ollamaBaseUrl').disabled = !enabled;
+            document.getElementById('ollamaDetectBtn').disabled = !enabled;
+            if (!enabled) {
+                document.getElementById('ollamaModelsResult').innerHTML = '';
+            }
+        }
+
+        async function detectOllamaModels() {
+            const baseUrl = document.getElementById('ollamaBaseUrl').value.trim() || 'http://localhost:11434';
+            const btn = document.getElementById('ollamaDetectBtn');
+            const resultEl = document.getElementById('ollamaModelsResult');
+            btn.disabled = true;
+            btn.textContent = '🔄 检测中...';
+            resultEl.innerHTML = '';
+            try {
+                const resp = await fetch('/api/ollama/detect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_url: baseUrl })
+                });
+                const data = await resp.json();
+                if (data.success && data.models.length > 0) {
+                    ollamaDetectedModels = data.models;
+                    resultEl.innerHTML = `<span style="color:var(--success);">✅ 检测到 ${data.models.length} 个模型:</span><br>` +
+                        data.models.map(m => `<label style="display:inline-flex;align-items:center;gap:2px;margin:2px 4px;font-size:11px;cursor:pointer;">
+                            <input type="checkbox" class="ollama-model-cb" value="${m}" checked> ${m}
+                        </label>`).join('');
+                } else if (data.success) {
+                    resultEl.innerHTML = '<span style="color:var(--text2);">Ollama 已连接，但未找到可用模型。请先用 `ollama pull` 下载模型</span>';
+                    ollamaDetectedModels = [];
+                } else {
+                    resultEl.innerHTML = `<span style="color:var(--error);">❗ ${data.error || '检测失败'}</span>`;
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span style="color:var(--error);">❗ 检测失败: ${e.message}</span>`;
+            }
+            btn.disabled = false;
+            btn.textContent = '🔍 检测模型';
+        }
+
+        async function saveOllamaConfig() {
+            const enabled = document.getElementById('ollamaEnabled').checked;
+            const baseUrl = document.getElementById('ollamaBaseUrl').value.trim() || 'http://localhost:11434';
+            // 收集勾选的模型
+            const checkboxes = document.querySelectorAll('.ollama-model-cb:checked');
+            const models = Array.from(checkboxes).map(cb => cb.value);
+            try {
+                const resp = await fetch('/api/ollama/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, base_url: baseUrl, models })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast('Ollama 配置已保存', 'success');
+                    // 刷新模型下拉列表
+                    if (typeof loadDramaModels === 'function') loadDramaModels();
+                }
+            } catch (e) {
+                showToast('保存 Ollama 配置失败: ' + e.message, 'error');
+            }
         }
 
         // ==================== 自定义模型管理 ====================
@@ -1335,8 +1445,9 @@
             const doubaoApiKey = document.getElementById('doubaoApiKeyInput').value.trim();
             const qwenApiKey = document.getElementById('qwenApiKeyInput').value.trim();
             const minimaxApiKey = document.getElementById('minimaxApiKeyInput').value.trim();
-            if (!apiKey && !deepseekApiKey && !doubaoApiKey && !qwenApiKey && !minimaxApiKey) {
-                showToast('请至少输入一个 API Key', 'error');
+            const ollamaEnabled = document.getElementById('ollamaEnabled').checked;
+            if (!apiKey && !deepseekApiKey && !doubaoApiKey && !qwenApiKey && !minimaxApiKey && !ollamaEnabled) {
+                showToast('请至少输入一个 API Key 或启用 Ollama', 'error');
                 return;
             }
             try {
@@ -1368,6 +1479,8 @@
                 } else {
                     showToast(data.message || '保存失败', 'error');
                 }
+                // 同时保存 Ollama 配置
+                await saveOllamaConfig();
             } catch (e) {
                 showToast('保存失败: ' + e.message, 'error');
             }
@@ -1457,6 +1570,7 @@
             }
 
             const size = document.getElementById('img2imgSize').value;
+            const model = document.getElementById('img2imgModel').value;
             const btn = document.getElementById('btnImg2Img');
 
             btn.disabled = true;
@@ -1467,7 +1581,7 @@
                 const resp = await fetch('/api/image/img2img', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt, image_url: imageUrl, size })
+                    body: JSON.stringify({ prompt, image_url: imageUrl, size, model })
                 });
                 const data = await resp.json();
 
@@ -1790,6 +1904,7 @@
                 // 填充独立生图/视频模型选择器
                 fillSelect('imageModel', data.image_models, data.defaults.image_model);
                 fillSelect('videoModelSelect', data.video_models, data.defaults.video_model);
+                fillSelect('img2imgModel', data.image_models, data.defaults.image_model);
             } catch (e) {
                 console.error('Failed to load drama models:', e);
             }

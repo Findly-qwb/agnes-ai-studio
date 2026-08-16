@@ -919,7 +919,8 @@ def drama_merge_custom():
 
 @drama_bp.route('/api/drama/models', methods=['GET'])
 def drama_models():
-    """返回可选模型列表（包含自定义模型）"""
+    """返回可选模型列表（包含自定义模型 + Ollama 动态检测模型）"""
+    from ..config import get_ollama_config
     # 合并自定义模型
     text_models = dict(TEXT_MODEL_OPTIONS)
     text_models.update(get_custom_models_by_type('text'))
@@ -927,6 +928,14 @@ def drama_models():
     image_models.update(get_custom_models_by_type('image'))
     video_models = dict(VIDEO_MODEL_OPTIONS)
     video_models.update(get_custom_models_by_type('video'))
+    
+    # 动态加入 Ollama 已检测到的模型
+    ollama_config = get_ollama_config()
+    if ollama_config.get('enabled'):
+        for model_name in ollama_config.get('models', []):
+            model_id = f'ollama:{model_name}'
+            label = f'Ollama {model_name} (本地)'
+            text_models[model_id] = label
     
     return jsonify({
         'success': True,

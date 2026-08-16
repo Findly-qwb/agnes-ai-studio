@@ -15,15 +15,22 @@ def call_text_model(system_prompt, user_prompt, api_key, model=None, max_tokens=
     
     Args:
         model: 模型名称，默认使用 DEFAULT_TEXT_MODEL
-        api_key: 对应厂商的 API Key
+        api_key: 对应厂商的 API Key（Ollama 不需要）
     """
     if model is None:
         model = DEFAULT_TEXT_MODEL
     base_url = get_text_base_url(model)
+    
+    # Ollama 不需要 API Key，使用哑认证
+    from ..config import get_vendor_from_model
+    is_ollama = get_vendor_from_model(model) == 'ollama'
+    
     headers = {
-        'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json'
     }
+    if not is_ollama:
+        headers['Authorization'] = f'Bearer {api_key}'
+    
     payload = {
         'model': model,
         'messages': [
@@ -33,7 +40,9 @@ def call_text_model(system_prompt, user_prompt, api_key, model=None, max_tokens=
         'max_tokens': max_tokens,
         'temperature': 0.7
     }
-    print(f"[文本模型] model={model}, base_url={base_url}")
+    # Ollama 本地模型使用更长的超时时间（本地推理较慢）
+    req_timeout = 600 if is_ollama else 300
+    print(f"[文本模型] model={model}, base_url={base_url}{' (Ollama本地)' if is_ollama else ''}")
     max_retries = 3
     for attempt in range(max_retries + 1):
         try:
@@ -41,7 +50,7 @@ def call_text_model(system_prompt, user_prompt, api_key, model=None, max_tokens=
                 f'{base_url}/chat/completions',
                 headers=headers,
                 json=payload,
-                timeout=300
+                timeout=req_timeout
             )
             if resp.status_code == 200:
                 result = resp.json()
@@ -461,12 +470,15 @@ def translate_cn_to_en(text, api_key, model=None):
     if not text or not is_mostly_chinese(text):
         return text  # 已经是英文，直接返回
     try:
-        from ..config import get_vendor_api_key, get_vendor_base_url
+        from ..config import get_vendor_api_key, get_vendor_base_url, get_vendor_from_model
         from ..models import DEFAULT_TEXT_MODEL
         model = model or DEFAULT_TEXT_MODEL
         base_url = get_vendor_base_url(model)
+        is_ollama = get_vendor_from_model(model) == 'ollama'
         key = api_key or get_vendor_api_key(model)
-        headers = {'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'}
+        headers = {'Content-Type': 'application/json'}
+        if not is_ollama:
+            headers['Authorization'] = f'Bearer {key}'
         payload = {
             'model': model,
             'messages': [
@@ -477,7 +489,7 @@ def translate_cn_to_en(text, api_key, model=None):
             'temperature': 0.3
         }
         import requests
-        resp = requests.post(f'{base_url}/chat/completions', headers=headers, json=payload, timeout=60)
+        resp = requests.post(f'{base_url}/chat/completions', headers=headers, json=payload, timeout=120 if is_ollama else 60)
         if resp.status_code == 200:
             result = resp.json()
             translated = result.get('choices', [{}])[0].get('message', {}).get('content', '').strip()

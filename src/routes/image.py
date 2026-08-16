@@ -92,7 +92,7 @@ def img2img():
 
     size = data.get('size', '1024x768')
     save_local = data.get('save_local', True)
-    model = data.get('model', 'agnes-image-2.0-flash')
+    model = data.get('model', 'agnes-image-2.1-flash')
     
     api_key = get_vendor_api_key(model)
     if not api_key:

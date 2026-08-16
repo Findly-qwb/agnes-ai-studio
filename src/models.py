@@ -19,6 +19,11 @@ TEXT_MODEL_OPTIONS = {
     'qwen-plus': 'Qwen Plus',
     'doubao-pro-32k': '豆包 Pro 32K',
     'doubao-lite-32k': '豆包 Lite 32K',
+    # Ollama 本地模型（常用）
+    'qwen2.5:7b': 'Ollama Qwen2.5 7B (本地)',
+    'qwen2.5:14b': 'Ollama Qwen2.5 14B (本地)',
+    'llama3.1:8b': 'Ollama Llama3.1 8B (本地)',
+    'mistral:7b': 'Ollama Mistral 7B (本地)',
 }
 IMAGE_MODEL_OPTIONS = {
     'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash (推荐)',

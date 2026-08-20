@@ -601,6 +601,19 @@
 
                 <div class="form-group">
                     <label class="form-label">编辑描述</label>
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:11px;color:var(--text2);margin-bottom:6px;">💡 商品宣传图模板（点击快速填入）：</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                            <button class="preset-btn" style="font-size:11px;padding:4px 10px;" onclick="setImg2ImgPreset('将这张商品图片放置在大理石台面上，背景为简约现代风格，柔和的自然光从左侧照射，营造高端质感的产品宣传图，4K高清，商业摄影风格')">🏠 家居摆件</button>
+                            <button class="preset-btn" style="font-size:11px;padding:4px 10px;" onclick="setImg2ImgPreset('将这张化妆品产品图放置在鲜花和绿叶环绕的大理石台面上，背景为柔和的粉色渐变，光线柔和通透，营造清新自然的美妆广告风格，高清商业摄影')">💄 美妆护肤</button>
+                            <button class="preset-btn" style="font-size:11px;padding:4px 10px;" onclick="setImg2ImgPreset('将这张食品图片放置在木质餐盘上，周围点缀新鲜食材和香料，背景为暖色调的厨房场景，自然光照射，营造食欲满满的美食宣传图，高清摄影风格')">🍽 美食餐饮</button>
+                            <button class="preset-btn" style="font-size:11px;padding:4px 10px;" onclick="setImg2ImgPreset('将这张数码产品图片放置在简约白色桌面上，背景为科技感渐变蓝色光影，光线干净利落，营造现代科技产品宣传图风格，4K高清商业摄影')">📱 数码产品</button>
+                            <button class="preset-btn" style="font-size:11px;padding:4px 10px;" onclick="setImg2ImgPreset('将这张服装图片展示在时尚都市街头，背景为模糊的城市建筑，阳光自然照射，营造时尚品牌宣传图风格，高清摄影')">👗 服装鞋帽</button>
+                            <button class="preset-btn" style="font-size:11px;padding:4px 10px;" onclick="setImg2ImgPreset('将这张珠宝首饰图片放置在黑色丝绒展示台上，背景为深色奢华风格，点级光影效果，营造高端珠宝广告风格，高清微距摄影')">💎 珠宝奢侈品</button>
+                            <button class="preset-btn" style="font-size:11px;padding:4px 10px;" onclick="setImg2ImgPreset('将这张母婴产品图片放置在温馨明亮的婴儿房场景中，周围有柔软的毛毯和可爱玩具，光线柔和温暖，营造安全温馨的宣传图风格，高清摄影')">🍼 母婴用品</button>
+                            <button class="preset-btn" style="font-size:11px;padding:4px 10px;" onclick="setImg2ImgPreset('将这张图片制作成电商主图风格，纯白背景，产品居中，四周留白均匀，光线均匀无阴影，突出产品本身细节，适合淘宝京东等电商平台使用')">🛒 电商主图</button>
+                        </div>
+                    </div>
                     <textarea class="form-textarea" id="img2imgPrompt" placeholder="描述你希望对参考图片做什么修改...&#10;例如：改成水彩画风格 / 将背景换为海边 / 变成卡通风格"></textarea>
                 </div>
 
@@ -858,18 +871,7 @@
                 <div id="dramaResumeSection" style="display:none;margin-top:12px;">
                     <div style="background:linear-gradient(135deg, #f39c12 0%, #e67e22 100%);border-radius:var(--radius);padding:16px;text-align:center;">
                         <div style="font-size:14px;color:#fff;margin-bottom:12px;">⏸ 流水线已暂停 — 请检查参考图，如需替换可点击卡片上的「替换」按钮</div>
-                        <button id="dramaResumeBtn" class="btn btn-primary" style="background:#fff;color:#e67e22;font-weight:700;padding:10px 32px;" onclick="resumeDrama()">✅ 确认并继续生成视频</button>
-                    </div>
-                </div>
-
-                <!-- 合并前确认按钮 -->
-                <div id="dramaMergeConfirmSection" style="display:none;margin-top:12px;">
-                    <div style="background:linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);border-radius:var(--radius);padding:16px;text-align:center;">
-                        <div id="dramaMergeConfirmMsg" style="font-size:14px;color:#fff;margin-bottom:12px;">⏸ 部分镜头生成失败，是否等待重新生成后再合并？</div>
-                        <div style="display:flex;gap:12px;justify-content:center;">
-                            <button id="dramaMergeWaitBtn" class="btn btn-primary" style="background:#fff;color:#e74c3c;font-weight:700;padding:10px 24px;" onclick="confirmMerge(true)">⟳ 等待并重试失败镜头</button>
-                            <button id="dramaMergeNowBtn" class="btn btn-primary" style="background:rgba(255,255,255,0.2);color:#fff;font-weight:700;padding:10px 24px;border:1px solid rgba(255,255,255,0.4);" onclick="confirmMerge(false)">▶ 直接合并已成功的</button>
-                        </div>
+                        <button id="dramaResumeBtn" class="btn btn-primary" style="background:#fff;color:#e67e22;font-weight:700;padding:10px 32px;" onclick="resumeDrama()">✅ 确认参考图</button>
                     </div>
                 </div>
 
@@ -1561,6 +1563,11 @@
         }
 
         // ==================== 图生图 ====================
+        function setImg2ImgPreset(text) {
+            document.getElementById('img2imgPrompt').value = text;
+            document.getElementById('img2imgPrompt').focus();
+        }
+
         async function generateImg2Img() {
             const prompt = document.getElementById('img2imgPrompt').value.trim();
             const imageUrl = document.getElementById('img2imgUrl').value.trim();
@@ -1923,16 +1930,16 @@
                 const data = await resp.json();
                 if (data.success) {
                     document.getElementById('dramaResumeSection').style.display = 'none';
-                    showToast('已确认，开始生成视频...', 'success');
+                    showToast('已确认参考图，请检查分镜提示词后启动视频生成', 'success');
                 } else {
                     showToast('恢复失败: ' + (data.error || ''), 'error');
                     btn.disabled = false;
-                    btn.textContent = '✅ 确认并继续生成视频';
+                    btn.textContent = '✅ 确认参考图';
                 }
             } catch (e) {
                 showToast('恢复失败: ' + e.message, 'error');
                 btn.disabled = false;
-                btn.textContent = '✅ 确认并继续生成视频';
+                btn.textContent = '✅ 确认参考图';
             }
         }
 
@@ -1992,37 +1999,6 @@
                 showToast('确认失败: ' + e.message, 'error');
                 if (directBtn) directBtn.disabled = false;
                 if (confirmBtn) confirmBtn.disabled = false;
-            }
-        }
-
-        async function confirmMerge(waitForRetry) {
-            const waitBtn = document.getElementById('dramaMergeWaitBtn');
-            const nowBtn = document.getElementById('dramaMergeNowBtn');
-            if (waitBtn) waitBtn.disabled = true;
-            if (nowBtn) nowBtn.disabled = true;
-
-            try {
-                const resp = await fetch('/api/drama/merge/confirm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ drama_id: currentDramaId, wait_for_retry: waitForRetry })
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    if (waitForRetry) {
-                        showToast('正在等待失败镜头重新生成...', 'success');
-                    } else {
-                        showToast('开始合并已成功的镜头...', 'success');
-                    }
-                } else {
-                    showToast('确认失败: ' + (data.error || ''), 'error');
-                    if (waitBtn) waitBtn.disabled = false;
-                    if (nowBtn) nowBtn.disabled = false;
-                }
-            } catch (e) {
-                showToast('确认失败: ' + e.message, 'error');
-                if (waitBtn) waitBtn.disabled = false;
-                if (nowBtn) nowBtn.disabled = false;
             }
         }
 
@@ -2261,6 +2237,30 @@
             }
         }
 
+        async function startShotVideo(shotIndex) {
+            if (!currentDramaId) return;
+            const btn = document.getElementById(`shot-start-${shotIndex}`);
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ 启动中...'; }
+
+            try {
+                const resp = await fetch('/api/drama/shot/regenerate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ drama_id: currentDramaId, shot_index: shotIndex })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast(`镜头 ${shotIndex} 开始生成`, 'success');
+                } else {
+                    showToast('启动失败: ' + (data.error || ''), 'error');
+                    if (btn) { btn.disabled = false; btn.textContent = '▶ 生成视频'; }
+                }
+            } catch (e) {
+                showToast('启动失败: ' + e.message, 'error');
+                if (btn) { btn.disabled = false; btn.textContent = '▶ 生成视频'; }
+            }
+        }
+
         async function regenerateShotVideo(shotIndex) {
             if (!currentDramaId) return;
             const btn = document.getElementById(`shot-regen-${shotIndex}`) || document.getElementById(`shot-retry-${shotIndex}`);
@@ -2405,7 +2405,6 @@
             document.getElementById('dramaStoryboardSection').style.display = 'none';
             document.getElementById('dramaAssetsSection').style.display = 'none';
             document.getElementById('dramaResumeSection').style.display = 'none';
-            document.getElementById('dramaMergeConfirmSection').style.display = 'none';
             document.getElementById('dramaCustomMergeSection').style.display = 'none';
             mergeSelectedShots = [];
             document.getElementById('dramaVideosSection').style.display = 'none';
@@ -2449,7 +2448,7 @@
                 if (!data.success) return;
 
                 // 更新进度条
-                const stepMap = { 'step1': 15, 'paused_story': 18, 'step2': 35, 'step3': 55, 'paused': 60, 'step4': 75, 'paused_merge': 85, 'waiting_retry': 88, 'merging': 90, 'completed': 100, 'failed': 100 };
+                const stepMap = { 'step1': 15, 'paused_story': 18, 'step2': 35, 'step3': 55, 'paused': 60, 'paused_video': 65, 'step4': 75, 'completed': 100, 'failed': 100 };
                 const progress = stepMap[data.status] || 5;
                 document.getElementById('dramaProgressBar').style.width = progress + '%';
                 if (data.status === 'failed') document.getElementById('dramaProgressBar').style.background = 'var(--error)';
@@ -2470,25 +2469,15 @@
                     document.getElementById('dramaResumeSection').style.display = 'none';
                 }
 
-                // 显示合并确认按钮
-                if (data.status === 'paused_merge') {
-                    document.getElementById('dramaMergeConfirmSection').style.display = 'block';
-                    document.getElementById('dramaMergeConfirmMsg').textContent = '⏸ ' + (data.message || '部分镜头生成失败，是否等待重新生成后再合并？');
-                    document.getElementById('dramaMergeWaitBtn').disabled = false;
-                    document.getElementById('dramaMergeNowBtn').disabled = false;
-                } else if (data.status === 'waiting_retry') {
-                    document.getElementById('dramaMergeConfirmSection').style.display = 'block';
-                    document.getElementById('dramaMergeConfirmMsg').textContent = '⟳ ' + (data.message || '等待失败的镜头重新生成...');
-                    document.getElementById('dramaMergeWaitBtn').disabled = true;
-                    document.getElementById('dramaMergeNowBtn').disabled = true;
-                } else {
-                    document.getElementById('dramaMergeConfirmSection').style.display = 'none';
+                // 显示视频区域（包含每个镜头的独立生成按钮）
+                if (data.status === 'paused_video') {
+                    document.getElementById('dramaVideosSection').style.display = 'block';
                 }
 
                 // 更新步骤标签
                 const stepLabels = {
                     'pending': '等待中', 'step1': '① 生成故事+剧本...', 'paused_story': '⏸ 请确认故事梗概', 'step2': '② 生成分镜...',
-                    'step3': '③ 提取素材...', 'paused': '⏸ 请确认参考图', 'step4': '④ 生成视频...', 'paused_merge': '⏸ 镜头合并确认', 'waiting_retry': '⟳ 等待失败镜头重试', 'merging': '⑤ 拼接完整视频...', 'completed': '✅ 完成', 'failed': '❌ 失败'
+                    'step3': '③ 提取素材...', 'paused': '⏸ 请确认参考图', 'paused_video': '⏸ 请逐个启动视频生成', 'step4': '④ 生成视频...', 'completed': '✅ 完成', 'failed': '❌ 失败'
                 };
                 document.getElementById('dramaStepBadge').textContent = stepLabels[data.status] || data.status;
                 document.getElementById('dramaMessage').textContent = data.message || '';
@@ -2553,22 +2542,33 @@
                                         </div>
                                     </div>
                                     <div style="margin-top:6px;">
-                                        <button onclick="toggleAssetPrompt(${idx})" style="font-size:10px;color:var(--text2);background:none;border:1px solid var(--border);border-radius:3px;padding:1px 6px;cursor:pointer;">📝 提示词</button>
-                                        <div id="asset-prompt-area-${idx}" style="display:none;margin-top:4px;">
-                                            <textarea id="asset-prompt-${idx}" style="width:100%;height:80px;font-size:10px;font-family:monospace;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px;resize:vertical;">${imgPrompt}</textarea>
-                                            <button onclick="regenerateWithPrompt(${idx})" style="font-size:10px;color:#fff;background:var(--accent);border:none;border-radius:3px;padding:2px 8px;cursor:pointer;margin-top:3px;">✏️ 修改并重新生成</button>
-                                        </div>
+                                        <div style="font-size:11px;font-weight:600;margin-bottom:3px;">📝 生成提示词</div>
+                                        <textarea id="asset-prompt-${idx}" style="width:100%;min-height:80px;height:auto;font-size:13px;font-family:monospace;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px;resize:vertical;line-height:1.4;overflow:hidden;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'">${imgPrompt}</textarea>
+                                        <button onclick="regenerateWithPrompt(${idx})" style="font-size:12px;color:#fff;background:var(--accent);border:none;border-radius:4px;padding:3px 10px;cursor:pointer;margin-top:4px;">✏️ 修改并重新生成</button>
                                     </div>
                                 </div>
                             </div>
                         `;
                     }).join('');
+                    // 自动撑高提示词 textarea
+                    el.querySelectorAll('textarea[id^="asset-prompt-"]').forEach(ta => {
+                        ta.style.height = 'auto';
+                        ta.style.height = ta.scrollHeight + 'px';
+                    });
                 }
 
                 // 显示视频
                 if (data.video_results && data.video_results.length > 0) {
                     document.getElementById('dramaVideosSection').style.display = 'block';
                     const el = document.getElementById('dramaVideosContent');
+
+                    // 保存提示词编辑状态（防止轮询重渲染导致内容丢失）
+                    const savedShotPromptValues = {};
+                    data.video_results.forEach(v => {
+                        const si = v.shot_index;
+                        const ta = document.getElementById(`shot-prompt-${si}`);
+                        if (ta) savedShotPromptValues[si] = ta.value;
+                    });
                     
                     // 合并后的完整视频
                     let mergedHtml = '';
@@ -2596,7 +2596,6 @@
                         const detail = shotDetails[si] || {};
                         const videoPrompt = detail.video_prompt_cn || detail.video_prompt || v.prompt || '';
                         const refImages = detail.reference_images || [];
-                        const promptPreview = videoPrompt.length > 150 ? videoPrompt.substring(0, 150) + '...' : videoPrompt;
                         
                         // 参考图缩略图
                         const refImgsHtml = refImages.length > 0 ? refImages.map((img, imgIdx) => {
@@ -2627,12 +2626,11 @@
                                     <span style="font-size:10px;color:var(--text2);">无参考图，可点击+上传</span>
                                 </div>`}
                                 <div>
-                                    <div style="font-size:10px;font-weight:600;cursor:pointer;" onclick="toggleShotPrompt(${si})">📝 提示词 <span style="color:var(--text2);font-weight:400;">(展开/收起)</span></div>
-                                    <div id="shot-prompt-area-${si}" style="display:none;margin-top:3px;">
-                                        <textarea id="shot-prompt-${si}" style="width:100%;height:80px;font-size:10px;font-family:monospace;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px;resize:vertical;">${videoPrompt}</textarea>
-                                        <button style="font-size:10px;color:#fff;background:var(--accent);border:none;border-radius:3px;padding:2px 8px;cursor:pointer;margin-top:3px;" onclick="regenerateShotWithPrompt(${si})">✏️ 用修改后的提示词重新生成</button>
+                                    <div style="font-size:11px;font-weight:600;margin-bottom:3px;">📝 视频提示词</div>
+                                    <div id="shot-prompt-area-${si}">
+                                        <textarea id="shot-prompt-${si}" style="width:100%;height:100px;font-size:13px;font-family:monospace;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px;resize:vertical;line-height:1.5;">${videoPrompt}</textarea>
+                                        <button style="font-size:12px;color:#fff;background:var(--accent);border:none;border-radius:4px;padding:4px 12px;cursor:pointer;margin-top:4px;" onclick="regenerateShotWithPrompt(${si})">✏️ 用修改后的提示词重新生成</button>
                                     </div>
-                                    <div id="shot-prompt-preview-${si}" style="font-size:10px;color:var(--accent);font-family:monospace;margin-top:2px;word-break:break-all;">${promptPreview}</div>
                                 </div>
                             </div>
                         `;
@@ -2667,9 +2665,21 @@
                             `;
                         } else if (v.status === 'generating') {
                             return `
-                                <div style="background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border);padding:12px;" id="shot-result-${si}">
-                                    <div style="font-size:13px;">镜头 ${si} <span style="color:var(--accent);font-size:11px;">⟳ 重新生成中...</span></div>
+                                <div style="background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border);padding:12px;" id="shot-card-${si}">
+                                    <div style="font-size:13px;font-weight:600;margin-bottom:8px;">镜头 ${si} <span style="color:var(--accent);font-size:11px;">⟳ 视频生成中...</span></div>
                                     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;">
+                                        <div style="flex-shrink:0;"><div style="width:100%;max-width:360px;height:200px;display:flex;align-items:center;justify-content:center;background:var(--surface2);border-radius:var(--radius-sm);"><span class="loading-spinner" style="margin-right:8px;"></span><span style="color:var(--text2);font-size:13px;">正在生成视频，请耐心等待...</span></div></div>
+                                        ${infoPanel}
+                                    </div>
+                                </div>
+                            `;
+                        } else if (v.status === 'pending') {
+                            return `
+                                <div style="background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border);padding:12px;" id="shot-card-${si}">
+                                    <div style="font-size:13px;font-weight:600;margin-bottom:8px;">镜头 ${si} <span style="color:var(--text2);font-size:11px;">⏳ 待生成</span>
+                                        <button style="float:right;font-size:12px;color:#fff;background:var(--success);border:none;border-radius:4px;padding:4px 14px;cursor:pointer;font-weight:600;" onclick="startShotVideo(${si})" id="shot-start-${si}">▶ 生成视频</button>
+                                    </div>
+                                    <div style="display:flex;gap:12px;flex-wrap:wrap;">
                                         ${infoPanel}
                                     </div>
                                 </div>
@@ -2684,7 +2694,13 @@
                     }).join('');
                     
                     el.innerHTML = mergedHtml + shotsHtml;
-                    
+
+                    // 恢复提示词编辑状态
+                    Object.keys(savedShotPromptValues).forEach(si => {
+                        const ta = document.getElementById(`shot-prompt-${si}`);
+                        if (ta) ta.value = savedShotPromptValues[si];
+                    });
+
                     // 显示自定义合并面板（有完成的视频时）
                     const hasCompleted = data.video_results.some(v => v.status === 'completed' && v.local_file);
                     if (hasCompleted) {

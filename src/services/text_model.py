@@ -397,6 +397,13 @@ def build_video_prompt(shot, shot_assets):
     
     # 【重要】禁止视频模型生成任何文字/字幕，中文字幕由 ffmpeg 后期烧录
     en_prompt = "No text, no subtitles, no captions, no labels, no written words, no letters, no signs, no watermarks, no typography, no writing of any kind should appear anywhere in the video. Pure cinematic scene only. "
+    
+    # 【角色一致性】在提示词开头强调必须严格匹配参考图
+    if shot_assets:
+        char_names = [a.get('name', '') for a in shot_assets if a.get('category') == 'characters']
+        if char_names:
+            en_prompt += f"STRICT CHARACTER CONSISTENCY REQUIRED: All characters ({', '.join(char_names)}) MUST appear exactly as shown in the reference images. Their facial features, hairstyle, hair color, skin tone, body proportions, clothing style and colors must match the reference images PRECISELY. Do NOT redesign, reinterpret, or alter any character's appearance in any way. "
+    
     en_prompt += base_prompt
     
     # 中文提示词（供前端展示）
@@ -426,8 +433,8 @@ def build_video_prompt(shot, shot_assets):
             if cat == 'characters':
                 char_descs.append(f"{name}: {desc}")
                 char_descs_cn.append(f"{name}: {desc_cn}")
-                # 【面部一致性】强调面部特征
-                en_prompt += f" CRUCIAL: The character {name}'s facial features (face shape, eye shape, nose, mouth, skin tone, hair style and color) in the video MUST exactly match the reference image. Do NOT alter or reimagine the character's face."
+                # 【面部一致性】强调面部特征和整体外观
+                en_prompt += f" CRITICAL for {name}: Face (face shape, eye shape and color, nose shape, mouth, eyebrows, skin tone), hair (style, color, length), body (height, build, proportions), and clothing (style, color, pattern) MUST EXACTLY match the reference image. Even minor deviations are NOT acceptable."
             elif cat == 'scenes':
                 scene_descs.append(desc)
                 scene_descs_cn.append(desc_cn)
@@ -438,8 +445,8 @@ def build_video_prompt(shot, shot_assets):
         consistency_parts = []
         consistency_parts_cn = []
         if char_descs:
-            consistency_parts.append("Character appearance (MUST match exactly, especially facial features): " + "; ".join(char_descs))
-            consistency_parts_cn.append("角色外观(必须严格一致，尤其是面部特征): " + "; ".join(char_descs_cn))
+            consistency_parts.append("CHARACTER REFERENCE (appearance MUST match reference images exactly): " + "; ".join(char_descs))
+            consistency_parts_cn.append("角色参考(外观必须严格匹配参考图): " + "; ".join(char_descs_cn))
         if prop_descs:
             consistency_parts.append("Props: " + "; ".join(prop_descs))
             consistency_parts_cn.append("道具: " + "; ".join(prop_descs_cn))

@@ -28,8 +28,137 @@ from ..services.text_model import (
 from ..services.video_gen import download_and_save_file, download_video_by_video_id
 from ..services.video_merge import merge_videos, burn_chinese_subtitle
 
+# 每个短剧任务的停止事件
+drama_stop_events = {}
 
-def build_character_image_prompt(desc):
+# ==================== 角色风格样式映射 ====================
+CHARACTER_STYLES = {
+    'anime': {
+        'name': '动漫卡通',
+        'character': (
+            "high quality anime character design sheet, detailed illustration, "
+            "vibrant colors, clean lineart, soft shading, professional concept art. "
+            "soft natural studio lighting, warm color temperature. "
+            "9:16 vertical composition, pure white minimalist background, premium character design board layout. "
+        ),
+        'scene': (
+            "high quality anime scene design, detailed illustration, vibrant colors, "
+            "soft shading, professional concept art, warm color temperature. "
+            "soft natural studio lighting. "
+        ),
+        'prop': (
+            "high quality anime prop design sheet, detailed illustration, vibrant colors, "
+            "soft shading, professional concept art, warm color temperature. "
+            "soft natural studio lighting. "
+        ),
+    },
+    'realistic': {
+        'name': '写实真人',
+        'character': (
+            "photorealistic character design sheet, hyper-detailed real human reference, "
+            "professional photography style, natural skin texture, realistic lighting. "
+            "studio lighting setup, 8K ultra HD quality. "
+            "9:16 vertical composition, pure white minimalist background, premium character design board layout. "
+        ),
+        'scene': (
+            "photorealistic scene design, hyper-detailed environment, "
+            "professional photography style, natural lighting, 8K ultra HD quality. "
+            "realistic textures and materials. "
+        ),
+        'prop': (
+            "photorealistic prop design sheet, hyper-detailed object reference, "
+            "professional product photography style, studio lighting, 8K ultra HD quality. "
+            "realistic textures and materials. "
+        ),
+    },
+    'pixar3d': {
+        'name': '皮克斯3D',
+        'character': (
+            "Pixar 3D style character design sheet, cute cartoon character, "
+            "smooth 3D rendering, soft global illumination, vibrant saturated colors. "
+            "Disney animation style, rounded shapes, big expressive eyes. "
+            "9:16 vertical composition, pure white minimalist background, premium character design board layout. "
+        ),
+        'scene': (
+            "Pixar 3D style scene design, cute cartoon environment, "
+            "smooth 3D rendering, soft global illumination, vibrant saturated colors. "
+            "Disney animation style. "
+        ),
+        'prop': (
+            "Pixar 3D style prop design sheet, cute cartoon object, "
+            "smooth 3D rendering, soft global illumination, vibrant saturated colors. "
+            "Disney animation style. "
+        ),
+    },
+    'watercolor': {
+        'name': '水彩手绘',
+        'character': (
+            "beautiful watercolor painting character design sheet, soft brush strokes, "
+            "delicate color bleeding effects, hand-painted illustration style. "
+            "artistic watercolor textures, warm pastel tones. "
+            "9:16 vertical composition, pure white minimalist background, premium character design board layout. "
+        ),
+        'scene': (
+            "beautiful watercolor painting scene design, soft brush strokes, "
+            "delicate color bleeding effects, hand-painted illustration style. "
+            "artistic watercolor textures, warm pastel tones. "
+        ),
+        'prop': (
+            "beautiful watercolor painting prop design sheet, soft brush strokes, "
+            "delicate color bleeding effects, hand-painted illustration style. "
+            "artistic watercolor textures, warm pastel tones. "
+        ),
+    },
+    'ink': {
+        'name': '中国水墨',
+        'character': (
+            "Chinese ink painting style character design sheet, traditional sumi-e brush strokes, "
+            "elegant black ink on rice paper, minimalist composition, zen aesthetics. "
+            "subtle color accents, artistic calligraphy elements. "
+            "9:16 vertical composition, pure white minimalist background, premium character design board layout. "
+        ),
+        'scene': (
+            "Chinese ink painting style scene design, traditional sumi-e brush strokes, "
+            "elegant black ink on rice paper, minimalist composition, zen aesthetics. "
+            "subtle color accents. "
+        ),
+        'prop': (
+            "Chinese ink painting style prop design sheet, traditional sumi-e brush strokes, "
+            "elegant black ink on rice paper, minimalist composition, zen aesthetics. "
+            "subtle color accents. "
+        ),
+    },
+    'semi_realistic': {
+        'name': '半写实插画',
+        'character': (
+            "semi-realistic digital painting character design sheet, detailed illustration, "
+            "realistic proportions with stylized features, smooth rendering. "
+            "professional concept art, balanced between realism and stylization. "
+            "9:16 vertical composition, pure white minimalist background, premium character design board layout. "
+        ),
+        'scene': (
+            "semi-realistic digital painting scene design, detailed illustration, "
+            "realistic proportions with stylized features, smooth rendering. "
+            "professional concept art, balanced between realism and stylization. "
+        ),
+        'prop': (
+            "semi-realistic digital painting prop design sheet, detailed illustration, "
+            "realistic proportions with stylized features, smooth rendering. "
+            "professional concept art, balanced between realism and stylization. "
+        ),
+    },
+}
+
+DEFAULT_CHARACTER_STYLE = 'anime'
+
+
+def get_style_base(category, character_style=None):
+    """根据分类和风格获取基础样式提示词"""
+    style = CHARACTER_STYLES.get(character_style, CHARACTER_STYLES['anime'])
+    return style.get(category, style['character'])
+
+
+def build_character_image_prompt(desc, character_style=None):
     """根据角色描述自动识别角色类型，生成合适的图片 prompt"""
     desc_lower = desc.lower()
     
@@ -51,12 +180,7 @@ def build_character_image_prompt(desc):
     is_plant = any(kw in desc_lower for kw in plant_keywords)
     is_animal = any(kw in desc_lower for kw in animal_keywords)
     
-    base_style = (
-        "high quality anime character design sheet, detailed illustration, "
-        "vibrant colors, clean lineart, soft shading, professional concept art. "
-        "soft natural studio lighting, warm color temperature. "
-        "9:16 vertical composition, pure white minimalist background, premium character design board layout. "
-    )
+    base_style = get_style_base('character', character_style)
     
     if is_plant and not is_animal:
         # 植物角色
@@ -124,13 +248,16 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
     if text_api_key is None:
         text_api_key = api_key
 
+    # 创建该任务的停止事件
+    drama_stop_events[drama_id] = threading.Event()
+
     def _update(**kwargs):
         with drama_lock:
             if drama_id in drama_tasks:
                 drama_tasks[drama_id].update(kwargs)
 
     def _is_shutdown():
-        return shutdown_event.is_set()
+        return shutdown_event.is_set() or drama_stop_events.get(drama_id, threading.Event()).is_set()
 
     try:
         text_model = drama_tasks[drama_id].get('text_model', DEFAULT_TEXT_MODEL)
@@ -250,6 +377,7 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
             return
 
         drama_base = ensure_drama_dirs(drama_id)
+        character_style = drama_tasks[drama_id].get('character_style', DEFAULT_CHARACTER_STYLE)
         img_success = 0
         img_fail = 0
         for idx, asset in enumerate(all_assets):
@@ -269,12 +397,11 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
                 else:
                     img_size = '768x1344'
             elif category == 'characters':
-                img_prompt, img_size = build_character_image_prompt(desc)
+                img_prompt, img_size = build_character_image_prompt(desc, character_style)
             elif category == 'scenes':
+                style_base = get_style_base('scene', character_style)
                 img_prompt = (
-                    f"high quality anime scene design, detailed illustration, vibrant colors, "
-                    f"soft shading, professional concept art, warm color temperature. "
-                    f"soft natural studio lighting. "
+                    f"{style_base}"
                     f"16:9 horizontal composition, pure white background border. "
                     f"Scene environment design concept art, multiple angles view. "
                     f"Scene description: {desc}. "
@@ -282,10 +409,9 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
                 )
                 img_size = '1344x768'
             else:
+                style_base = get_style_base('prop', character_style)
                 img_prompt = (
-                    f"high quality anime prop design sheet, detailed illustration, vibrant colors, "
-                    f"soft shading, professional concept art, warm color temperature. "
-                    f"soft natural studio lighting. "
+                    f"{style_base}"
                     f"9:16 vertical composition, pure white minimalist background, premium prop design board layout. "
                     f"Multiple views: front, side, back, top, detail close-ups. "
                     f"Material and texture details clearly visible. "
@@ -545,6 +671,7 @@ def drama_start():
     text_model = data.get('text_model', DEFAULT_TEXT_MODEL)
     image_model = data.get('image_model', DEFAULT_IMAGE_MODEL)
     video_model = data.get('video_model', DEFAULT_VIDEO_MODEL)
+    character_style = data.get('character_style', DEFAULT_CHARACTER_STYLE)
     drama_id = uuid.uuid4().hex[:12]
 
     text_api_key = get_vendor_api_key(text_model, fallback_key=api_key)
@@ -554,6 +681,7 @@ def drama_start():
             'drama_id': drama_id, 'status': 'pending', 'step': '',
             'prompt': prompt, 'shot_duration': shot_duration,
             'text_model': text_model, 'image_model': image_model, 'video_model': video_model,
+            'character_style': character_style,
             'text_api_key': text_api_key,
             'script': None, 'story': None, 'storyboard': None, 'shots': [],
             'assets': [], 'video_results': [], 'shot_details': {},
@@ -570,6 +698,28 @@ def drama_start():
     thread.start()
 
     return jsonify({'success': True, 'drama_id': drama_id, 'status': 'pending'})
+
+
+@drama_bp.route('/api/drama/stop', methods=['POST'])
+def drama_stop():
+    """停止短剧生成流水线"""
+    data = request.get_json()
+    drama_id = data.get('drama_id')
+    if not drama_id:
+        return jsonify({'success': False, 'error': '缺少 drama_id'}), 400
+
+    # 触发该任务的停止事件
+    if drama_id in drama_stop_events:
+        drama_stop_events[drama_id].set()
+
+    # 更新任务状态
+    with drama_lock:
+        if drama_id in drama_tasks:
+            drama_tasks[drama_id]['status'] = 'stopped'
+            drama_tasks[drama_id]['message'] = '用户已停止生成'
+
+    print(f"[短剧 {drama_id}] 用户请求停止")
+    return jsonify({'success': True, 'message': '已发送停止信号'})
 
 
 @drama_bp.route('/api/drama/resume', methods=['POST'])
@@ -891,6 +1041,7 @@ def drama_asset_regenerate():
         desc = asset.get('desc', '')
         name = asset.get('name', '')
         original_prompt_en = asset.get('prompt_en', '')
+        character_style = drama.get('character_style', DEFAULT_CHARACTER_STYLE)
 
         # 如果用户提供了自定义中文描述，替换原始 desc 并重建 prompt
         if custom_desc and custom_desc.strip():
@@ -900,12 +1051,11 @@ def drama_asset_regenerate():
                 assets[asset_index]['desc'] = desc
             # 用新 desc 通过模板重建英文 prompt
             if category == 'characters':
-                img_prompt, img_size = build_character_image_prompt(desc)
+                img_prompt, img_size = build_character_image_prompt(desc, character_style)
             elif category == 'scenes':
+                style_base = get_style_base('scene', character_style)
                 img_prompt = (
-                    f"high quality anime scene design, detailed illustration, vibrant colors, "
-                    f"soft shading, professional concept art, warm color temperature. "
-                    f"soft natural studio lighting. "
+                    f"{style_base}"
                     f"16:9 horizontal composition, pure white background border. "
                     f"Scene environment design concept art, multiple angles view. "
                     f"Scene description: {desc}. "
@@ -913,10 +1063,9 @@ def drama_asset_regenerate():
                 )
                 img_size = '1344x768'
             else:
+                style_base = get_style_base('prop', character_style)
                 img_prompt = (
-                    f"high quality anime prop design sheet, detailed illustration, vibrant colors, "
-                    f"soft shading, professional concept art, warm color temperature. "
-                    f"soft natural studio lighting. "
+                    f"{style_base}"
                     f"9:16 vertical composition, pure white minimalist background, premium prop design board layout. "
                     f"Multiple views: front, side, back, top, detail close-ups. "
                     f"Material and texture details clearly visible. "
@@ -930,12 +1079,11 @@ def drama_asset_regenerate():
                 img_prompt = original_prompt_en
                 img_size = '1344x768' if category == 'scenes' else '768x1344'
             elif category == 'characters':
-                img_prompt, img_size = build_character_image_prompt(desc)
+                img_prompt, img_size = build_character_image_prompt(desc, character_style)
             elif category == 'scenes':
+                style_base = get_style_base('scene', character_style)
                 img_prompt = (
-                    f"high quality anime scene design, detailed illustration, vibrant colors, "
-                    f"soft shading, professional concept art, warm color temperature. "
-                    f"soft natural studio lighting. "
+                    f"{style_base}"
                     f"16:9 horizontal composition, pure white background border. "
                     f"Scene environment design concept art, multiple angles view. "
                     f"Scene description: {desc}. "
@@ -943,10 +1091,9 @@ def drama_asset_regenerate():
                 )
                 img_size = '1344x768'
             else:
+                style_base = get_style_base('prop', character_style)
                 img_prompt = (
-                    f"high quality anime prop design sheet, detailed illustration, vibrant colors, "
-                    f"soft shading, professional concept art, warm color temperature. "
-                    f"soft natural studio lighting. "
+                    f"{style_base}"
                     f"9:16 vertical composition, pure white minimalist background, premium prop design board layout. "
                     f"Multiple views: front, side, back, top, detail close-ups. "
                     f"Material and texture details clearly visible. "

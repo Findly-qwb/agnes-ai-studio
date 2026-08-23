@@ -37,3 +37,12 @@ def serve_drama_file(filename):
     dramas_dir = os.path.join(app_dir, 'dramas')
     os.makedirs(dramas_dir, exist_ok=True)
     return send_from_directory(dramas_dir, filename)
+
+
+@pages_bp.route('/anchor/<path:filename>')
+def serve_anchor_file(filename):
+    """服务数字人口播输出文件（形象图/视频/音频）"""
+    app_dir = get_app_dir()
+    anchor_dir = os.path.join(app_dir, 'anchor')
+    os.makedirs(anchor_dir, exist_ok=True)
+    return send_from_directory(anchor_dir, filename)

@@ -13,17 +13,77 @@ from datetime import datetime
 from ..config import get_app_dir, get_vendor_base_url, BASE_URL, shutdown_event
 from ..models import video_tasks, task_lock
 
+# Agnes Video 2.5 及后续版本使用 OpenAI Videos 兼容新 API（mode/seconds/size），
+# 旧模型（v2.0 及第三方）使用 width/height/num_frames 旧协议
+NEW_AGNES_VIDEO_MODELS = {'agnes-video-2.5-flash', 'agnes-video-2.5'}
 
-def download_video_by_video_id(video_id, base_url, headers, subdir, prefix):
+
+def is_new_video_api(model):
+    """判断是否使用 Agnes 新视频 API"""
+    return (model or '') in NEW_AGNES_VIDEO_MODELS
+
+
+def _nearest_aspect_ratio(width, height):
+    """根据宽高近似选择画幅"""
+    candidates = {'21:9': 21/9, '16:9': 16/9, '4:3': 4/3, '1:1': 1.0, '3:4': 3/4, '9:16': 9/16}
+    target = width / height
+    return min(candidates, key=lambda k: abs(candidates[k] - target))
+
+
+def build_video_payload(model, prompt, image_url='', negative_prompt='', width=1152, height=768, num_frames=121, frame_rate=24, images=None):
+    """构建视频请求 payload，兼容新旧 API 格式"""
+    print(f"[视频参数] 模型={model} num_frames={num_frames} frame_rate={frame_rate} width={width} height={height} "
+          f"有参考图={bool(image_url or images)} 负面词={bool(negative_prompt)}")
+    if is_new_video_api(model):
+        seconds = str(max(4, min(12, round(num_frames / frame_rate))))
+        payload = {
+            'model': model,
+            'prompt': prompt,
+            'mode': 'reference' if (image_url or images) else 'text',
+            'seconds': seconds,
+            'size': '720P',
+            'aspect_ratio': _nearest_aspect_ratio(width, height),
+        }
+        ref_imgs = list(images or []) + ([image_url] if image_url else [])
+        if ref_imgs:
+            payload['images'] = ref_imgs[:5]
+        print(f"[视频参数] 新API换算 seconds={seconds} mode={payload['mode']} aspect_ratio={payload['aspect_ratio']} => 提交payload: {payload}")
+        return payload
+    payload = {
+        'model': model,
+        'prompt': prompt,
+        'width': width,
+        'height': height,
+        'num_frames': num_frames,
+        'frame_rate': frame_rate,
+    }
+    if image_url:
+        payload['image'] = image_url
+    if negative_prompt:
+        payload['negative_prompt'] = negative_prompt
+    return payload
+
+
+def query_video_task(model, base_url, headers, task_id=None, video_id=None):
+    """查询视频任务状态，兼容新旧 API"""
+    print(f"[视频轮询] 模型={model} task_id={task_id} video_id={str(video_id)[:40] if video_id else None} base_url={base_url}")
+    if is_new_video_api(model) and video_id:
+        return requests.get(f'{base_url}/agnesapi', headers=headers,
+                            params={'video_id': video_id, 'model_name': model}, timeout=30)
+    return requests.get(f'{base_url}/videos/{task_id}', headers=headers, timeout=30)
+
+
+def download_video_by_video_id(video_id, base_url, headers, subdir, prefix, model=None):
     """通过 video_id 使用 /agnesapi 端点下载视频
-    
+
     Args:
         video_id: 视频 ID
         base_url: API Base URL
         headers: 请求头
         subdir: 保存子目录
         prefix: 文件名前缀
-    
+        model: 模型名（新 API 查询时建议携带）
+
     Returns:
         保存后的文件名，失败返回 None
     """
@@ -31,7 +91,10 @@ def download_video_by_video_id(video_id, base_url, headers, subdir, prefix):
         print(f"[视频下载] 通过 video_id 获取视频: {video_id[:50]}...")
         # 尝试新端点 /agnesapi?video_id=<VIDEO_ID>
         agnesapi_url = f'{base_url}/agnesapi'
-        resp = requests.get(agnesapi_url, headers=headers, params={'video_id': video_id}, timeout=(30, 120), stream=True)
+        params = {'video_id': video_id}
+        if model:
+            params['model_name'] = model
+        resp = requests.get(agnesapi_url, headers=headers, params=params, timeout=(30, 120), stream=True)
         
         if resp.status_code == 200:
             content_type = resp.headers.get('Content-Type', '')
@@ -173,7 +236,7 @@ def download_and_save_file(url, subdir, prefix, ext, max_retries=3):
     return None
 
 
-def poll_video_status(task_id, api_key, model=None):
+def poll_video_status(task_id, api_key, model=None, video_id=None):
     """后台轮询视频生成状态"""
     headers = {'Authorization': f'Bearer {api_key}'}
     base_url = get_vendor_base_url(model) if model else BASE_URL
@@ -185,11 +248,7 @@ def poll_video_status(task_id, api_key, model=None):
             print(f"[轮询] 收到关闭信号，退出轮询 task_id={task_id}")
             return
         try:
-            resp = requests.get(
-                f'{base_url}/videos/{task_id}',
-                headers=headers,
-                timeout=30
-            )
+            resp = query_video_task(model, base_url, headers, task_id=task_id, video_id=video_id)
 
             if resp.status_code == 200:
                 result = resp.json()
@@ -242,7 +301,7 @@ def poll_video_status(task_id, api_key, model=None):
                                 video_id = result['video_id']
                                 print(f"[视频下载] 使用 video_id: {video_id[:50]}...")
                                 local_filename = download_video_by_video_id(
-                                    video_id, base_url, headers, 'videos', 'video'
+                                    video_id, base_url, headers, 'videos', 'video', model
                                 )
 
                             video_tasks[task_id]['result'] = {

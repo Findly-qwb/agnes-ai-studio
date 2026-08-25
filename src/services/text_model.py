@@ -56,9 +56,11 @@ def call_text_model(system_prompt, user_prompt, api_key, model=None, max_tokens=
                 result = resp.json()
                 content = result['choices'][0]['message']['content']
                 return content
-            elif resp.status_code in (502, 503, 504, 433) and attempt < max_retries:
-                wait_sec = 10 * (attempt + 1)
-                print(f"[文本模型] 网关错误 {resp.status_code}，{wait_sec}秒后重试 ({attempt+1}/{max_retries})...")
+            elif resp.status_code in (429, 502, 503, 504, 433) and attempt < max_retries:
+                # TPM 限额通常在下一个分钟窗口恢复，优先使用服务端的等待建议。
+                retry_after = resp.headers.get('Retry-After')
+                wait_sec = int(retry_after) if retry_after and retry_after.isdigit() else (60 if resp.status_code == 429 else 10 * (attempt + 1))
+                print(f"[文本模型] 请求受限或网关错误 {resp.status_code}，{wait_sec}秒后重试 ({attempt+1}/{max_retries})...")
                 time.sleep(wait_sec)
                 continue
             else:

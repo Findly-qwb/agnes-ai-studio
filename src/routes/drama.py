@@ -25,7 +25,7 @@ from ..services.text_model import (
     build_video_prompt, sanitize_image_prompt,
     translate_cn_to_en, is_mostly_chinese
 )
-from ..services.video_gen import download_and_save_file, download_video_by_video_id
+from ..services.video_gen import download_and_save_file, download_video_by_video_id, build_video_payload, query_video_task
 from ..services.video_merge import merge_videos, burn_chinese_subtitle
 
 # 每个短剧任务的停止事件
@@ -1388,14 +1388,12 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx, cust
         vid_base_url = get_vendor_base_url(video_model)
         vid_api_key = get_vendor_api_key(video_model, fallback_key=api_key)
         headers = {'Authorization': f'Bearer {vid_api_key}', 'Content-Type': 'application/json'}
-        payload = {
-            'model': video_model, 'prompt': video_prompt,
-            'width': 1152, 'height': 768,
-            'num_frames': num_frames, 'frame_rate': 24,
-            'negative_prompt': 'text, subtitles, captions, labels, letters, words, writing, watermark, signs, typography, English text, Chinese text, any text overlay'
-        }
-        if primary_image:
-            payload['image'] = primary_image
+        payload = build_video_payload(
+            video_model, video_prompt,
+            image_url=primary_image or '', images=[img.get('image_url') for img in (custom_images or []) if img.get('image_url')],
+            width=1152, height=768, num_frames=num_frames, frame_rate=24,
+            negative_prompt='text, subtitles, captions, labels, letters, words, writing, watermark, signs, typography, English text, Chinese text, any text overlay'
+        )
 
         # 提交视频任务
         vtask_id = None
@@ -1405,7 +1403,8 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx, cust
             resp = requests.post(f'{vid_base_url}/videos', headers=headers, json=payload, timeout=60)
             if resp.status_code == 200:
                 vdata = resp.json()
-                vtask_id = vdata.get('task_id') or vdata.get('video_id')
+                vtask_id = vdata.get('task_id') or vdata.get('id')
+                v_video_id = vdata.get('video_id', '')
                 break
             elif resp.status_code == 400 and use_negative_prompt and 'negative_prompt' in resp.text.lower():
                 print(f"[镜头重生成] 视频模型不支持 negative_prompt 参数，已移除")
@@ -1437,11 +1436,10 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx, cust
 
         # 轮询等待完成
         v_url = ''
-        v_video_id = ''
         for poll_i in range(120):
             time.sleep(10)
             try:
-                poll_resp = requests.get(f'{vid_base_url}/videos/{vtask_id}', headers=headers, timeout=30)
+                poll_resp = query_video_task(video_model, vid_base_url, headers, task_id=vtask_id, video_id=v_video_id)
                 if poll_resp.status_code != 200:
                     continue
                 pr_data = poll_resp.json()
@@ -1501,7 +1499,7 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx, cust
             print(f"[镜头重生成] 镜头 {shot_index} 使用 video_id 下载: {v_video_id[:50]}...")
             local_fn = download_video_by_video_id(
                 v_video_id, vid_base_url, headers,
-                f'dramas/{drama_id}/videos', f'shot_{shot_index}'
+                f'dramas/{drama_id}/videos', f'shot_{shot_index}', video_model
             )
 
         if local_fn:

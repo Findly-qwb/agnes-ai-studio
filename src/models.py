@@ -33,6 +33,7 @@ IMAGE_MODEL_OPTIONS = {
     'qwen-image-plus': 'Qwen Image Plus',
 }
 VIDEO_MODEL_OPTIONS = {
+    'agnes-video-2.5-flash': 'Agnes Video 2.5 Flash (推荐)',
     'agnes-video-v2.0': 'Agnes Video 2.0 (推荐)',
     'minimax-video-01': 'MiniMax Video 01',
     'doubao-seaweed-t2v': '豆包 Seaweed T2V',
@@ -40,7 +41,7 @@ VIDEO_MODEL_OPTIONS = {
 }
 DEFAULT_TEXT_MODEL = 'agnes-2.5-flash'
 DEFAULT_IMAGE_MODEL = 'agnes-image-2.1-flash'
-DEFAULT_VIDEO_MODEL = 'agnes-video-v2.0'
+DEFAULT_VIDEO_MODEL = 'agnes-video-2.5-flash'
 
 # ---------- 视频任务状态（内存存储，重启后丢失）----------
 video_tasks = {}

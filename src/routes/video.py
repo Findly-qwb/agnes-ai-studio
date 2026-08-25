@@ -3,13 +3,14 @@
 """
 
 import time
+import json
 import threading
 import requests
 from flask import Blueprint, request, jsonify
 
 from ..config import get_vendor_api_key, get_vendor_base_url, resolve_image_url
 from ..models import video_tasks, task_lock
-from ..services.video_gen import poll_video_status
+from ..services.video_gen import poll_video_status, build_video_payload
 
 video_bp = Blueprint('video', __name__)
 
@@ -44,22 +45,15 @@ def generate_video():
             'Content-Type': 'application/json'
         }
 
-        payload = {
-            'model': model,
-            'prompt': prompt,
-            'width': width,
-            'height': height,
-            'num_frames': num_frames,
-            'frame_rate': frame_rate
-        }
+        payload = build_video_payload(
+            model, prompt, image_url=image_url, negative_prompt=negative_prompt,
+            width=width, height=height, num_frames=num_frames, frame_rate=frame_rate
+        )
 
-        if image_url:
-            payload['image'] = image_url
-        if negative_prompt:
-            payload['negative_prompt'] = negative_prompt
         if seed is not None:
             payload['seed'] = seed
 
+        print(f"[视频提交] POST {base_url}/videos header_authorization={'Bearer '+api_key[:8]+'...' if api_key else '(空)'} params={json.dumps(payload, ensure_ascii=False)}")
         resp = requests.post(
             f'{base_url}/videos',
             headers=headers,
@@ -69,7 +63,7 @@ def generate_video():
 
         if resp.status_code == 200:
             result = resp.json()
-            task_id = result.get('task_id')
+            task_id = result.get('task_id') or result.get('id')
             video_id = result.get('video_id')
 
             with task_lock:
@@ -84,7 +78,7 @@ def generate_video():
 
             thread = threading.Thread(
                 target=poll_video_status,
-                args=(task_id, api_key, model),
+                args=(task_id, api_key, model, video_id),
                 daemon=True
             )
             thread.start()

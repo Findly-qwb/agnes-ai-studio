@@ -54,7 +54,9 @@ pyinstaller --clean --noconfirm Agnes-AI-Studio.spec
 ### 2. 安装依赖
 
 ```bash
-pip install -r requirements.txt
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
 ### 3. 启动服务

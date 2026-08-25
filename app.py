@@ -5,6 +5,7 @@ Agnes AI Studio - 图片 & 视频生成可视化工具
 """
 
 import os
+import socket
 import sys
 import threading
 import webbrowser
@@ -28,25 +29,38 @@ from src.config import get_config_path, shutdown_event
 app = create_app()
 
 
+def get_available_port(start_port=5000):
+    """返回从默认端口开始的首个可用本地端口。"""
+    port = start_port
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            if sock.connect_ex(('127.0.0.1', port)) != 0:
+                return port
+        port += 1
+
+
 def main():
     """主入口"""
+    port = get_available_port()
+    local_url = f'http://127.0.0.1:{port}'
+
     print("=" * 60)
     print("  Agnes AI Studio - 图片 & 视频生成可视化工具 v1.0")
     print("  项目目录: " + os.path.dirname(get_config_path()))
     print("=" * 60)
-    print("  本地访问: http://127.0.0.1:5000")
-    print("  局域网访问: http://你的IP地址:5000")
+    print(f"  本地访问: {local_url}")
+    print(f"  局域网访问: http://你的IP地址:{port}")
     print("  按 Ctrl+C 停止服务")
     print("=" * 60)
 
     # 自动打开浏览器
-    threading.Timer(1.5, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
+    threading.Timer(1.5, lambda: webbrowser.open(local_url)).start()
 
     print("  提示: 按 Ctrl+C 可停止服务")
     print("=" * 60)
 
     try:
-        app.run(host='0.0.0.0', port=5000, debug=False)
+        app.run(host='0.0.0.0', port=port, debug=False)
     except KeyboardInterrupt:
         print("\n[关闭] 收到 Ctrl+C，正在停止服务...")
         shutdown_event.set()

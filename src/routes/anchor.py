@@ -21,7 +21,7 @@ from ..config import (
 from ..models import DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, TEXT_MODEL_OPTIONS, IMAGE_MODEL_OPTIONS, VIDEO_MODEL_OPTIONS
 from ..services.text_model import call_text_model
 from ..services.tts import generate_tts_audio, get_audio_duration, get_available_voices
-from ..services.video_gen import download_video_by_video_id, download_and_save_file
+from ..services.video_gen import download_video_by_video_id, download_and_save_file, build_video_payload, query_video_task
 from ..services.video_merge import get_ffmpeg_path, get_video_duration, burn_chinese_subtitle, _find_chinese_font
 
 anchor_bp = Blueprint('anchor', __name__)
@@ -537,14 +537,11 @@ def _mode_c_ai_generate(task_id, video_prompt, segments, visual_dir, api_key, vi
         # 限制帧数：8n+1 规则，按每秒24帧计算
         num_frames = min(int(duration * 24) // 8 * 8 + 1, 441)
 
-        payload = {
-            'model': video_model,
-            'prompt': prompt[:1000],  # 限制提示词长度
-            'width': 1152,
-            'height': 768,
-            'num_frames': num_frames,
-            'frame_rate': 24,
-        }
+        payload = build_video_payload(
+            video_model, prompt[:1000],  # 限制提示词长度
+            width=1152, height=768,
+            num_frames=num_frames, frame_rate=24,
+        )
 
         # 重试机制：最多重试 3 次
         max_retries = 3
@@ -568,6 +565,7 @@ def _mode_c_ai_generate(task_id, video_prompt, segments, visual_dir, api_key, vi
 
                 result = resp.json()
                 task_api_id = result.get('id') or result.get('task_id') or result.get('video_id', '')
+                task_video_id = result.get('video_id', '')
                 if not task_api_id:
                     print(f"[数字人 {task_id}] 未获取到任务ID: {json.dumps(result)[:200]}")
                     if attempt < max_retries - 1:
@@ -578,7 +576,7 @@ def _mode_c_ai_generate(task_id, video_prompt, segments, visual_dir, api_key, vi
                         break
 
                 # 轮询等待视频完成
-                video_url = _poll_video(task_api_id, base_url, headers, task_id, i)
+                video_url = _poll_video(task_api_id, task_video_id, base_url, headers, task_id, i, video_model)
                 if not video_url:
                     if attempt < max_retries - 1:
                         print(f"[数字人 {task_id}] 第 {i+1} 段视频轮询失败，重试...")
@@ -596,7 +594,7 @@ def _mode_c_ai_generate(task_id, video_prompt, segments, visual_dir, api_key, vi
                 elif result.get('video_id'):
                     local_file = download_video_by_video_id(
                         result['video_id'], base_url, headers,
-                        os.path.join('anchor', task_id, 'visuals'), f'seg_{i:03d}'
+                        os.path.join('anchor', task_id, 'visuals'), f'seg_{i:03d}', video_model
                     )
 
                 if local_file:
@@ -634,7 +632,7 @@ def _mode_c_ai_generate(task_id, video_prompt, segments, visual_dir, api_key, vi
     return True
 
 
-def _poll_video(task_api_id, base_url, headers, task_id, seg_idx):
+def _poll_video(task_api_id, task_video_id, base_url, headers, task_id, seg_idx, video_model=None):
     """轮询视频生成状态"""
     max_polls = 60
     for poll in range(max_polls):
@@ -642,7 +640,10 @@ def _poll_video(task_api_id, base_url, headers, task_id, seg_idx):
             return None
         time.sleep(5)
         try:
-            resp = requests.get(f'{base_url}/videos/{task_api_id}', headers=headers, timeout=30)
+            resp = query_video_task(
+                video_model, base_url, headers,
+                task_id=task_api_id, video_id=task_video_id
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 status = data.get('status', '')

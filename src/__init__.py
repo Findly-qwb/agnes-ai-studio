@@ -3,20 +3,24 @@ Agnes AI Studio - Flask 应用工厂
 """
 
 import os
-# Flask 是一个使用 Python 编写的轻量级 Web 应用框架。
-# 它被称为“微框架”，因为其核心简单但易于通过扩展增加功能，非常适合快速开发 Web 应用。
-# 这里导入 Flask 类，用于创建和配置 WSGI Web 应用程序的核心实例。
 from flask import Flask
+from flask_cors import CORS
 from .config import get_base_path, ensure_output_dirs
 
 
 def create_app():
     """创建并配置 Flask 应用"""
+    # 前端构建产物目录
+    frontend_dist = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend', 'dist')
+    has_frontend = os.path.exists(os.path.join(frontend_dist, 'index.html'))
+    static_dir = frontend_dist if has_frontend else os.path.join(get_base_path(), 'static')
+
     app = Flask(
         __name__,
-        static_folder=os.path.join(get_base_path(), 'static'),
+        static_folder=static_dir,
         static_url_path=''
     )
+    CORS(app)
 
     # 确保输出目录存在
     ensure_output_dirs()

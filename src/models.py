@@ -28,6 +28,7 @@ TEXT_MODEL_OPTIONS = {
 IMAGE_MODEL_OPTIONS = {
     'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash (推荐)',
     'agnes-image-2.0-flash': 'Agnes Image 2.0 Flash',
+    'gemini-3.1-flash-lite-image': 'Gemini 3.1 Flash Lite Image',
     'doubao-seedream-3-0': '豆包 Seedream 3.0',
     'minimax-image-01': 'MiniMax Image 01',
     'qwen-image-plus': 'Qwen Image Plus',

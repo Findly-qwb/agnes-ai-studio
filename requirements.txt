@@ -3,3 +3,4 @@ flask-cors>=4.0.0
 requests>=2.31.0
 imageio-ffmpeg>=0.5.1
 edge-tts>=6.1.0
+google-genai>=1.47.0

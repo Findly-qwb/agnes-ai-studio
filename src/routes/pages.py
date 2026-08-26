@@ -1,5 +1,5 @@
 """
-首页路由 + 静态文件服务
+首页路由 + 静态文件服务 + React SPA 兜底
 """
 
 import os
@@ -8,14 +8,24 @@ from ..config import get_base_path, get_app_dir, ensure_output_dirs
 
 pages_bp = Blueprint('pages', __name__)
 
+FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'dist')
+
+
+def _static_dir():
+    if os.path.exists(os.path.join(FRONTEND_DIST, 'index.html')):
+        return FRONTEND_DIST
+    return os.path.join(get_base_path(), 'static')
+
 
 @pages_bp.route('/')
 def index():
-    """返回前端页面"""
-    return send_from_directory(
-        os.path.join(get_base_path(), 'static'),
-        'index.html'
-    )
+    return send_from_directory(_static_dir(), 'index.html')
+
+
+@pages_bp.route('/assets/<path:filename>')
+def serve_assets(filename):
+    """React 构建产物的静态资源"""
+    return send_from_directory(os.path.join(_static_dir(), 'assets'), filename)
 
 
 @pages_bp.route('/videos/<path:filename>')

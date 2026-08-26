@@ -8,7 +8,8 @@ import requests
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 
-from ..config import get_vendor_api_key, get_vendor_base_url, resolve_image_url, ensure_output_dirs
+from ..config import get_vendor_api_key, get_vendor_base_url, get_custom_model_config, resolve_image_url, ensure_output_dirs
+from ..services.gemini_image import is_gemini_image, generate_gemini_image
 from ..services.video_gen import download_and_save_file
 
 image_bp = Blueprint('image', __name__)
@@ -25,13 +26,24 @@ def generate_image():
     size = data.get('size', '1024x1024')
     model = data.get('model', 'agnes-image-2.1-flash')
     save_local = data.get('save_local', True)
-    
-    api_key = get_vendor_api_key(model)
-    if not api_key:
-        return jsonify({'success': False, 'error': '请先配置 API Key'}), 401
-    base_url = get_vendor_base_url(model)
 
     try:
+        # Gemini 原生图像模型：走 Google generateContent，不依赖厂商/全局 key 路由
+        # 自定义模型即使名称含 gemini 也不走此路径，沿用自定义 base_url/key
+        if is_gemini_image(model) and not get_custom_model_config(model):
+            relative_url, local_filename = generate_gemini_image(prompt, model)
+            return jsonify({
+                'success': True,
+                'image_url': relative_url,
+                'local_file': local_filename,
+                'raw_response': {'note': 'gemini-image', 'model': model}
+            })
+
+        api_key = get_vendor_api_key(model)
+        if not api_key:
+            return jsonify({'success': False, 'error': '请先配置 API Key'}), 401
+        base_url = get_vendor_base_url(model)
+
         headers = {
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json'
@@ -93,13 +105,25 @@ def img2img():
     size = data.get('size', '1024x768')
     save_local = data.get('save_local', True)
     model = data.get('model', 'agnes-image-2.1-flash')
-    
-    api_key = get_vendor_api_key(model)
-    if not api_key:
-        return jsonify({'success': False, 'error': '请先配置 API Key'}), 401
-    base_url = get_vendor_base_url(model)
 
     try:
+        # Gemini 原生图像模型：图生图通过多模态 contents 传入
+        # 自定义模型即使名称含 gemini 也不走此路径，沿用自定义 base_url/key
+        if is_gemini_image(model) and not get_custom_model_config(model):
+            from ..services.gemini_image import generate_gemini_image_with_reference
+            relative_url, local_filename = generate_gemini_image_with_reference(prompt, image_url, model)
+            return jsonify({
+                'success': True,
+                'image_url': relative_url,
+                'local_file': local_filename,
+                'raw_response': {'note': 'gemini-image-img2img', 'model': model}
+            })
+
+        api_key = get_vendor_api_key(model)
+        if not api_key:
+            return jsonify({'success': False, 'error': '请先配置 API Key'}), 401
+        base_url = get_vendor_base_url(model)
+
         headers = {
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json'

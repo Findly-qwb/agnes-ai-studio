@@ -11,9 +11,10 @@ import requests
 from flask import Blueprint, request, jsonify
 
 from ..config import (
-    get_api_key, get_app_dir, get_vendor_api_key, get_vendor_base_url, shutdown_event,
-    get_custom_models_by_type
+    get_api_key, get_app_dir, get_vendor_api_key, get_vendor_base_url, get_custom_model_config,
+    shutdown_event, get_custom_models_by_type
 )
+from ..services.gemini_image import is_gemini_image, generate_gemini_image
 from ..models import (
     drama_tasks, drama_lock, ensure_drama_dirs,
     TEXT_MODEL_OPTIONS, IMAGE_MODEL_OPTIONS, VIDEO_MODEL_OPTIONS,
@@ -433,8 +434,20 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
 
             # 重试机制：最多重试 2 次（共 3 次尝试）
             max_retries = 2
+            safe_name = asset.get('name', f'asset_{idx}').replace(' ', '_')
             for attempt in range(max_retries + 1):
                 try:
+                    # Gemini 原生图像模型：直接本地生成保存，不走 /images/generations
+                    # 自定义模型即使名称含 gemini 也不走此路径
+                    if is_gemini_image(image_model) and not get_custom_model_config(image_model):
+                        relative_url, local = generate_gemini_image(
+                            img_prompt, image_model, f'dramas/{drama_id}/images', safe_name)
+                        asset['image_url'] = relative_url
+                        asset['local_file'] = local
+                        img_success += 1
+                        print(f"[短剧 {drama_id}] 素材 {idx+1} [{asset['name']}]: OK (gemini)")
+                        break
+
                     resp = requests.post(f'{img_base_url}/images/generations', headers=headers,
                         json={'model': image_model, 'prompt': img_prompt, 'size': img_size},
                         timeout=180)
@@ -445,7 +458,6 @@ def drama_pipeline(drama_id, api_key, text_api_key=None):
                             asset['image_url'] = image_url
                             if image_url:
                                 # 用中文名作为文件名前缀
-                                safe_name = asset.get('name', f'asset_{idx}').replace(' ', '_')
                                 local = download_and_save_file(image_url, f'dramas/{drama_id}/images', safe_name, 'png')
                                 asset['local_file'] = local
                                 img_success += 1
@@ -1112,8 +1124,16 @@ def drama_asset_regenerate():
         # 调用图片 API（带重试）
         max_retries = 2
         image_url = None
+        safe_name = name.replace(' ', '_')
         for attempt in range(max_retries + 1):
             try:
+                # Gemini 原生图像模型：直接本地生成保存
+                # 自定义模型即使名称含 gemini 也不走此路径
+                if is_gemini_image(image_model) and not get_custom_model_config(image_model):
+                    image_url, local = generate_gemini_image(
+                        img_prompt, image_model, f'dramas/{drama_id}/images', safe_name)
+                    break
+
                 resp = requests.post(f'{img_base_url}/images/generations', headers=headers,
                     json={'model': image_model, 'prompt': img_prompt, 'size': img_size}, timeout=180)
                 if resp.status_code == 200:
@@ -1136,9 +1156,13 @@ def drama_asset_regenerate():
         if not image_url:
             return jsonify({'success': False, 'error': '图片生成失败，请重试'}), 500
 
-        # 保存文件
-        safe_name = name.replace(' ', '_')
-        local = download_and_save_file(image_url, f'dramas/{drama_id}/images', safe_name, 'png')
+        # 保存文件（OpenAI 兼容模型返回远程 URL 时下载到本地）
+        local = None
+        if image_url.startswith('http'):
+            local = download_and_save_file(image_url, f'dramas/{drama_id}/images', safe_name, 'png')
+        elif image_url.startswith('/dramas/'):
+            import os.path
+            local = os.path.basename(image_url.rstrip('/'))
 
         with drama_lock:
             assets[asset_index]['image_url'] = image_url
@@ -1400,7 +1424,22 @@ def _regenerate_shot_video(drama_id, shot_index, shot, api_key, result_idx, cust
         max_submit_retries = 3
         use_negative_prompt = True
         for submit_attempt in range(max_submit_retries + 1):
-            resp = requests.post(f'{vid_base_url}/videos', headers=headers, json=payload, timeout=60)
+            try:
+                # 视频提交接口可能响应较慢，超时放宽到 120s
+                resp = requests.post(f'{vid_base_url}/videos', headers=headers, json=payload, timeout=120)
+            except requests.exceptions.RequestException as e:
+                # 超时/连接错误：有剩余重试则等待后重试，否则标记失败
+                if submit_attempt < max_submit_retries:
+                    wait_sec = 30 * (submit_attempt + 1)
+                    print(f"[镜头重生成] 镜头 {shot_index} 请求异常({type(e).__name__})，等待{wait_sec}秒重试 ({submit_attempt+1}/{max_submit_retries})...")
+                    time.sleep(wait_sec)
+                    continue
+                with drama_lock:
+                    drama_tasks[drama_id]['video_results'][result_idx] = {
+                        'shot_index': shot_index, 'status': 'failed',
+                        'error': f'视频提交{type(e).__name__}: {str(e)[:200]}', 'prompt': video_prompt
+                    }
+                return
             if resp.status_code == 200:
                 vdata = resp.json()
                 vtask_id = vdata.get('task_id') or vdata.get('id')

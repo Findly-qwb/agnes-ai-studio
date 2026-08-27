@@ -185,7 +185,6 @@ export function PromptInput({ busy, onSubmit }: Props) {
             </select>
           </>
         )}
-        <span style={{ fontSize: 11, color: 'var(--text2)', marginLeft: 'auto' }}>Enter 生成 · Shift+Enter 换行</span>
         <button className="wand-btn" onClick={enhance} disabled={enhancing} title="提示词优化">
           {enhancing ? <span className="loading-spinner" /> : '🪄'}
         </button>

@@ -23,6 +23,8 @@ export function Settings({ show, onClose }: SettingsProps) {
   const [showAddForm, setShowAddForm] = useState(false)
   const [newModel, setNewModel] = useState({ id: '', name: '', type: 'text', baseUrl: '', apiKey: '' })
   const [loading, setLoading] = useState(false)
+  const [textModelOptions, setTextModelOptions] = useState<Record<string, string>>({})
+  const [enhanceModel, setEnhanceModel] = useState('agnes-2.5-flash')
 
   useEffect(() => {
     if (!show) return
@@ -32,6 +34,10 @@ export function Settings({ show, onClose }: SettingsProps) {
       if (d.doubao_api_key_masked) setDoubaoKey('')
       if (d.qwen_api_key_masked) setQwenKey('')
       if (d.minimax_api_key_masked) setMinimaxKey('')
+      if (d.prompt_enhance_model) setEnhanceModel(d.prompt_enhance_model)
+    }).catch(() => { })
+    api.anchorModels().then(d => {
+      if (d.success) setTextModelOptions(d.text_models || {})
     }).catch(() => { })
     api.ollamaConfig().then(d => {
       if (d.success) {
@@ -59,6 +65,7 @@ export function Settings({ show, onClose }: SettingsProps) {
       if (doubaoKey) payload.doubao_api_key = doubaoKey
       if (qwenKey) payload.qwen_api_key = qwenKey
       if (minimaxKey) payload.minimax_api_key = minimaxKey
+      if (enhanceModel) payload.prompt_enhance_model = enhanceModel
       if (Object.keys(payload).length > 0) {
         await api.saveConfig(payload)
       }
@@ -145,6 +152,14 @@ export function Settings({ show, onClose }: SettingsProps) {
       <div className="form-group">
         <label className="form-label">通义千问（DashScope）API Key</label>
         <input className="form-input" type="password" value={qwenKey} onChange={e => setQwenKey(e.target.value)} placeholder="DashScope API Key（可选）" />
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">🪄 提示词优化模型</label>
+        <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 6 }}>PromptInput 里 🪄 魔法棒按钮用来扩写提示词所使用的文本模型</div>
+        <select className="form-select" value={enhanceModel} onChange={e => setEnhanceModel(e.target.value)}>
+          {Object.entries(textModelOptions).map(([k, v]) => <option key={k} value={k}>{String(v)}</option>)}
+        </select>
       </div>
 
       <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '12px 0' }} />

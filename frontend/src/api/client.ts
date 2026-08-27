@@ -1,4 +1,5 @@
-const API_BASE = 'http://127.0.0.1:5001'
+// ponytail: 生产构建由 Flask 同端口托管，直接用当前 origin；dev 模式仍指向固定 5001
+const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:5001' : window.location.origin
 
 async function req<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -14,11 +15,13 @@ export const api = {
   // Config
   getConfig: () => req<any>('/api/config'),
   saveConfig: (body: any) => req<any>('/api/config', { method: 'POST', body: JSON.stringify(body) }),
+  enhancePrompt: (body: { prompt: string; mode: string }) =>
+    req<any>('/api/prompt/enhance', { method: 'POST', body: JSON.stringify(body) }),
 
   // Image
-  generateImage: (body: { prompt: string; model?: string; size?: string; save_local?: boolean }) =>
+  generateImage: (body: { prompt: string; model?: string; size?: string; ratio?: string; save_local?: boolean }) =>
     req<any>('/api/image/generate', { method: 'POST', body: JSON.stringify(body) }),
-  img2img: (body: { prompt: string; image_url: string; size?: string; model?: string }) =>
+  img2img: (body: { prompt: string; image_url: string; size?: string; ratio?: string; model?: string }) =>
     req<any>('/api/image/img2img', { method: 'POST', body: JSON.stringify(body) }),
   uploadImage: (file: File) => {
     const fd = new FormData()

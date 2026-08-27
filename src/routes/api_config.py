@@ -62,7 +62,10 @@ def api_config():
             if val:
                 config[url_field] = val
             # 空值时保留已有配置，不删除
-        
+
+        if 'prompt_enhance_model' in data:
+            config['prompt_enhance_model'] = data['prompt_enhance_model'].strip() or ''
+
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f)
         return jsonify({'success': True, 'message': '配置已保存'})

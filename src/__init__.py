@@ -3,9 +3,16 @@ Agnes AI Studio - Flask 应用工厂
 """
 
 import os
-from flask import Flask
+import json
+from flask import Flask, request
 from flask_cors import CORS
 from .config import get_base_path, ensure_output_dirs
+
+
+def _brief(value, max_len=120):
+    """截断超长值（如 base64 图片），日志只保留可读部分"""
+    s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return s if len(s) <= max_len else s[:max_len] + f'...(共{len(s)}字符)'
 
 
 def create_app():
@@ -41,5 +48,14 @@ def create_app():
     app.register_blueprint(drama_bp)
     app.register_blueprint(files_bp)
     app.register_blueprint(anchor_bp)
+
+    @app.before_request
+    def log_request_params():
+        """打印所有写接口的入参，base64 等超长值自动截断"""
+        if request.method in ('POST', 'PUT', 'PATCH'):
+            data = request.get_json(silent=True) or {}
+            brief_body = {k: _brief(v) for k, v in data.items()}
+            files = list(request.files.keys())
+            print(f"[REQ] {request.method} {request.path} body={brief_body}" + (f" files={files}" if files else ''), flush=True)
 
     return app

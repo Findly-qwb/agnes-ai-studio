@@ -4,15 +4,52 @@
 
 import os
 import uuid
+import json
 import requests
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 
-from ..config import get_vendor_api_key, get_vendor_base_url, get_custom_model_config, resolve_image_url, ensure_output_dirs
+from ..config import get_vendor_api_key, get_vendor_base_url, get_custom_model_config, resolve_image_url, ensure_output_dirs, get_config_path
 from ..services.gemini_image import is_gemini_image, generate_gemini_image
 from ..services.video_gen import download_and_save_file
+from ..services.text_model import call_text_model
+from ..models import DEFAULT_TEXT_MODEL
 
 image_bp = Blueprint('image', __name__)
+
+
+@image_bp.route('/api/prompt/enhance', methods=['POST'])
+def enhance_prompt():
+    """提示词优化：用文本模型把短描述扩写成高质量提示词"""
+    data = request.get_json() or {}
+    prompt = data.get('prompt', '').strip()
+    mode = data.get('mode', 'image')
+    if not prompt:
+        return jsonify({'success': False, 'error': '请输入提示词'}), 400
+
+    # 从配置读取提示词优化模型，默认文本模型
+    enhance_model = DEFAULT_TEXT_MODEL
+    try:
+        with open(get_config_path(), 'r', encoding='utf-8') as f:
+            enhance_model = json.load(f).get('prompt_enhance_model') or DEFAULT_TEXT_MODEL
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    api_key = get_vendor_api_key(enhance_model)
+    if not api_key:
+        return jsonify({'success': False, 'error': '请先配置 API Key'}), 401
+
+    system_prompts = {
+        'image': '你是一位专业的 AI 图像提示词优化师。请将用户输入的简短描述扩写为一段高质量、结构化的英文提示词，结构为：[主体] + [场景/背景] + [风格] + [光照] + [构图] + [画质要求]。只输出扩写后的提示词本身，不要任何解释、引号或前缀。',
+        'img2img': '你是一位专业的 AI 图像编辑提示词优化师。用户提供参考图并描述想要做的修改，请将输入扩写为高质量、结构化的英文编辑提示词，按照以下结构组织：[需要改变的要求] + [新的风格/场景] + [需要添加或移除的元素] + [需要保留的元素]（主体、构图、人物表情/姿态等）。只输出编辑提示词本身，不要任何解释、引号或前缀。',
+        'video': 'You are an expert AI video prompt optimizer. Expand the user\'s brief description into a detailed, cinematic English video prompt covering: subject, setting, camera movement, lighting, mood, and quality. Output only the optimized prompt itself, with no explanations, quotes, or prefixes.',
+    }
+
+    try:
+        enhanced = call_text_model(system_prompts.get(mode, system_prompts['image']), prompt, api_key, model=enhance_model, max_tokens=1024)
+        return jsonify({'success': True, 'enhanced': enhanced, 'model': enhance_model})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'优化失败: {e}'}), 500
 
 
 @image_bp.route('/api/image/generate', methods=['POST'])
@@ -24,6 +61,7 @@ def generate_image():
         return jsonify({'success': False, 'error': '请输入图片描述'}), 400
 
     size = data.get('size', '1024x1024')
+    ratio = data.get('ratio')
     model = data.get('model', 'agnes-image-2.1-flash')
     save_local = data.get('save_local', True)
 
@@ -53,6 +91,8 @@ def generate_image():
             'prompt': prompt,
             'size': size
         }
+        if ratio:
+            payload['ratio'] = ratio
 
         resp = requests.post(
             f'{base_url}/images/generations',
@@ -103,6 +143,7 @@ def img2img():
     image_url = resolve_image_url(image_url)
 
     size = data.get('size', '1024x768')
+    ratio = data.get('ratio')
     save_local = data.get('save_local', True)
     model = data.get('model', 'agnes-image-2.1-flash')
 
@@ -133,11 +174,12 @@ def img2img():
             'prompt': prompt,
             'size': size,
             'extra_body': {
-                'tags': ['img2img'],
                 'image': [image_url],
                 'response_format': 'url'
             }
         }
+        if ratio:
+            payload['ratio'] = ratio
 
         resp = requests.post(
             f'{base_url}/images/generations',

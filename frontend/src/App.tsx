@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Layout } from './components/Layout'
 import { Toast } from './components/Toast'
+import { HomePage } from './pages/Home'
 import { ImagePage } from './pages/Image'
 import { Img2ImgPage } from './pages/Img2Img'
 import { VideoPage } from './pages/Video'
@@ -11,11 +12,12 @@ import { FilesPage } from './pages/Files'
 import { Settings } from './pages/Settings'
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('image')
+  const [activeTab, setActiveTab] = useState('home')
   const [showSettings, setShowSettings] = useState(false)
 
   const renderPage = () => {
     switch (activeTab) {
+      case 'home': return <HomePage />
       case 'image': return <ImagePage />
       case 'img2img': return <Img2ImgPage />
       case 'video': return <VideoPage />

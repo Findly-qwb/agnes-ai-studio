@@ -2,3 +2,5 @@ venv
 dramas
 config.json
 # frontend
+.playwright-mcp
+*.png

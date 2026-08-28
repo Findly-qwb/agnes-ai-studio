@@ -38,6 +38,7 @@ def create_app():
     from .routes.image import image_bp
     from .routes.video import video_bp
     from .routes.drama import drama_bp
+    from .routes.drama_flow import flow_bp
     from .routes.files import files_bp
     from .routes.anchor import anchor_bp
 
@@ -46,6 +47,7 @@ def create_app():
     app.register_blueprint(image_bp)
     app.register_blueprint(video_bp)
     app.register_blueprint(drama_bp)
+    app.register_blueprint(flow_bp)
     app.register_blueprint(files_bp)
     app.register_blueprint(anchor_bp)
 

@@ -61,6 +61,38 @@ export const api = {
   },
   shotDeleteImage: (body: any) => req<any>('/api/drama/shot/delete_image', { method: 'POST', body: JSON.stringify(body) }),
 
+  // Drama Flow（节点流画布）
+  flowCreate: (body: any) => req<any>('/api/drama/flow/create', { method: 'POST', body: JSON.stringify(body) }),
+  flowList: () => req<any>('/api/drama/flow/list'),
+  flowGet: (flowId: string) => req<any>(`/api/drama/flow/${flowId}`),
+  flowSaveGraph: (flowId: string, body: any) => req<any>(`/api/drama/flow/${flowId}/graph`, { method: 'POST', body: JSON.stringify(body) }),
+  flowRun: (flowId: string, body?: any) => req<any>(`/api/drama/flow/${flowId}/run`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  flowRunDownstream: (flowId: string, nodeId: string) => req<any>(`/api/drama/flow/${flowId}/run-downstream`, { method: 'POST', body: JSON.stringify({ node_id: nodeId }) }),
+  flowStop: (flowId: string) => req<any>(`/api/drama/flow/${flowId}/stop`, { method: 'POST' }),
+  flowNodeEdit: (flowId: string, nodeId: string, body: any) => req<any>(`/api/drama/flow/${flowId}/node/${nodeId}/edit`, { method: 'POST', body: JSON.stringify(body) }),
+  flowReset: (flowId: string) => req<any>(`/api/drama/flow/${flowId}/reset`, { method: 'POST' }),
+  flowDelete: (flowId: string) => req<any>(`/api/drama/flow/${flowId}`, { method: 'DELETE' }),
+  flowAssetReplace: (flowId: string, assetIndex: number, file: File) => {
+    const fd = new FormData()
+    fd.append('asset_index', String(assetIndex))
+    fd.append('file', file)
+    return fetch(`${API_BASE}/api/drama/flow/${flowId}/asset/replace`, { method: 'POST', body: fd }).then(r => r.json())
+  },
+  flowAssetRegenerate: (flowId: string, body: any) => req<any>(`/api/drama/flow/${flowId}/asset/regenerate`, { method: 'POST', body: JSON.stringify(body) }),
+  flowShotRun: (flowId: string, body: any) => req<any>(`/api/drama/flow/${flowId}/shot/run`, { method: 'POST', body: JSON.stringify(body) }),
+  flowShotDetail: (flowId: string, shotIndex: number) => req<any>(`/api/drama/flow/${flowId}/shot/detail?shot_index=${shotIndex}`),
+  flowShotImageUpload: (flowId: string, shotIndex: number, file: File) => {
+    const fd = new FormData()
+    fd.append('shot_index', String(shotIndex))
+    fd.append('file', file)
+    return fetch(`${API_BASE}/api/drama/flow/${flowId}/shot/image/upload`, { method: 'POST', body: fd }).then(r => r.json())
+  },
+  flowShotImageDelete: (flowId: string, body: any) => req<any>(`/api/drama/flow/${flowId}/shot/image/delete`, { method: 'POST', body: JSON.stringify(body) }),
+  flowMerge: (flowId: string, body: any) => req<any>(`/api/drama/flow/${flowId}/merge`, { method: 'POST', body: JSON.stringify(body) }),
+  flowTemplates: () => req<any>('/api/drama/flow/templates'),
+  flowTemplateSave: (flowId: string, name: string) => req<any>(`/api/drama/flow/${flowId}/template/save`, { method: 'POST', body: JSON.stringify({ name }) }),
+  flowTemplateDelete: (name: string) => req<any>(`/api/drama/flow/templates/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
   // Anchor
   anchorModels: () => req<any>('/api/anchor/models'),
   anchorVoices: () => req<any>('/api/anchor/voices'),

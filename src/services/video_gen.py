@@ -236,6 +236,107 @@ def download_and_save_file(url, subdir, prefix, ext, max_retries=3):
     return None
 
 
+def run_video_job(video_model, prompt, primary_image='', extra_images=None, num_frames=121,
+                  frame_rate=24, api_key='', negative_prompt='', width=768, height=1152,
+                  save_subdir='videos', prefix='shot', abort_check=None):
+    """提交单个视频任务并轮询等待完成，随后下载保存。
+
+    Args:
+        abort_check: 可选回调，返回 True 时中止（返回 error='已中止'）
+
+    Returns:
+        {'ok': bool, 'local_file': str|None, 'video_url': str, 'error': str}
+    """
+    base_url = get_vendor_base_url(video_model)
+    key = get_vendor_api_key(video_model, fallback_key=api_key)
+    headers = {'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'}
+    payload = build_video_payload(
+        video_model, prompt, image_url=primary_image, images=extra_images or [],
+        width=width, height=height, num_frames=num_frames, frame_rate=frame_rate,
+        negative_prompt=negative_prompt)
+
+    # 提交（带重试；遇到不支持 negative_prompt 自动移除）
+    vtask_id, v_video_id = None, ''
+    use_negative = bool(negative_prompt)
+    for attempt in range(4):
+        if abort_check and abort_check():
+            return {'ok': False, 'local_file': None, 'video_url': '', 'error': '已中止'}
+        try:
+            resp = requests.post(f'{base_url}/videos', headers=headers, json=payload, timeout=120)
+        except requests.exceptions.RequestException as e:
+            if attempt < 3:
+                time.sleep(30 * (attempt + 1))
+                continue
+            return {'ok': False, 'local_file': None, 'video_url': '', 'error': f'提交失败({type(e).__name__}): {str(e)[:200]}'}
+        if resp.status_code == 200:
+            vdata = resp.json()
+            vtask_id = vdata.get('task_id') or vdata.get('id')
+            v_video_id = vdata.get('video_id', '')
+            break
+        elif resp.status_code == 400 and use_negative and 'negative' in resp.text.lower():
+            payload.pop('negative_prompt', None)
+            use_negative = False
+            continue
+        elif resp.status_code in (429, 503, 433) and attempt < 3:
+            time.sleep(30 * (attempt + 1))
+            continue
+        else:
+            return {'ok': False, 'local_file': None, 'video_url': '', 'error': f'API {resp.status_code}: {resp.text[:300]}'}
+    if not vtask_id:
+        return {'ok': False, 'local_file': None, 'video_url': '', 'error': '视频任务提交失败'}
+
+    # 轮询（10s × 120 = 20 分钟上限）
+    v_url = ''
+    for _ in range(120):
+        if shutdown_event.wait(timeout=10):
+            return {'ok': False, 'local_file': None, 'video_url': '', 'error': '服务关闭'}
+        if abort_check and abort_check():
+            return {'ok': False, 'local_file': None, 'video_url': '', 'error': '已中止'}
+        try:
+            poll = query_video_task(video_model, base_url, headers, task_id=vtask_id, video_id=v_video_id)
+            if poll.status_code != 200:
+                continue
+            pr = poll.json()
+            st = pr.get('status', '')
+            if st == 'completed':
+                v_url = (pr.get('video_url') or pr.get('url') or pr.get('output_url')
+                         or pr.get('video') or '')
+                if not v_url and isinstance(pr.get('data'), dict):
+                    v_url = pr['data'].get('url', '') or pr['data'].get('video_url', '')
+                v_video_id = pr.get('video_id', '') or v_video_id
+                break
+            elif st == 'failed':
+                return {'ok': False, 'local_file': None, 'video_url': '', 'error': pr.get('error', '生成失败')}
+        except Exception as e:
+            print(f"[视频任务] 轮询异常: {e}")
+            continue
+    else:
+        return {'ok': False, 'local_file': None, 'video_url': '', 'error': '轮询超时(20分钟)'}
+
+    # 下载三路回退：URL → content 端点 → video_id
+    local = None
+    if v_url:
+        local = download_and_save_file(v_url, save_subdir, prefix, 'mp4')
+    if not local:
+        try:
+            cr = requests.get(f'{base_url}/videos/{vtask_id}/content', headers=headers, timeout=30)
+            if cr.status_code == 200:
+                cd = cr.json()
+                c_url = (cd.get('url') or cd.get('video_url') or cd.get('video') or '')
+                if not c_url and isinstance(cd.get('data'), dict):
+                    c_url = cd['data'].get('url', '') or cd['data'].get('video_url', '')
+                if c_url:
+                    local = download_and_save_file(c_url, save_subdir, prefix, 'mp4')
+        except Exception:
+            pass
+    if not local and v_video_id:
+        local = download_video_by_video_id(v_video_id, base_url, headers, save_subdir, prefix, video_model)
+
+    if not local:
+        return {'ok': False, 'local_file': None, 'video_url': v_url, 'error': '视频下载失败'}
+    return {'ok': True, 'local_file': local, 'video_url': v_url, 'error': ''}
+
+
 def poll_video_status(task_id, api_key, model=None, video_id=None):
     """后台轮询视频生成状态"""
     headers = {'Authorization': f'Bearer {api_key}'}

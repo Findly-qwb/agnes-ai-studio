@@ -188,6 +188,33 @@ def get_vendor_api_key(model, fallback_key=None):
         return fallback_key
     return get_api_key()
 
+
+def has_vendor_key(model):
+    """该模型是否有可用的 API Key（模型列表过滤用，避免展示点了必挂的模型）"""
+    vendor = get_vendor_from_model(model)
+    if vendor == 'ollama':
+        return True  # 本地模型不需要 key，出现在列表即已启用
+    custom_config = get_custom_model_config(model)
+    if custom_config:
+        return bool(custom_config.get('api_key', '').strip())
+    data = {}
+    config_file = get_config_path()
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    if model.lower().startswith('gemini'):
+        return bool(data.get('gemini_api_key', '').strip())
+    if data.get(f'{vendor}_api_key', '').strip():
+        return True
+    if vendor in ('deepseek', 'gpt', 'qwen', 'doubao') and data.get('text_api_key', '').strip():
+        return True
+    if vendor == 'agnes':
+        return bool(data.get('api_key', '').strip())
+    return False
+
 # 兼容旧函数名
 def get_text_base_url(model=None):
     return get_vendor_base_url(model)

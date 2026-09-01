@@ -892,8 +892,8 @@ def drama_merge_custom():
 
 @drama_bp.route('/api/drama/models', methods=['GET'])
 def drama_models():
-    """返回可选模型列表（包含自定义模型 + Ollama 动态检测模型）"""
-    from ..config import get_ollama_config
+    """返回可选模型列表（包含自定义模型 + Ollama 动态检测模型；过滤掉未配置 Key 的）"""
+    from ..config import get_ollama_config, has_vendor_key
     # 合并自定义模型
     text_models = dict(TEXT_MODEL_OPTIONS)
     text_models.update(get_custom_models_by_type('text'))
@@ -910,15 +910,23 @@ def drama_models():
             label = f'Ollama {model_name} (本地)'
             text_models[model_id] = label
     
+    # 只保留有可用 Key 的模型
+    text_models = {k: v for k, v in text_models.items() if has_vendor_key(k)}
+    image_models = {k: v for k, v in image_models.items() if has_vendor_key(k)}
+    video_models = {k: v for k, v in video_models.items() if has_vendor_key(k)}
+
+    def _pick(default, options):
+        return default if default in options else (next(iter(options), default))
+
     return jsonify({
         'success': True,
         'text_models': text_models,
         'image_models': image_models,
         'video_models': video_models,
         'defaults': {
-            'text_model': DEFAULT_TEXT_MODEL,
-            'image_model': DEFAULT_IMAGE_MODEL,
-            'video_model': DEFAULT_VIDEO_MODEL
+            'text_model': _pick(DEFAULT_TEXT_MODEL, text_models),
+            'image_model': _pick(DEFAULT_IMAGE_MODEL, image_models),
+            'video_model': _pick(DEFAULT_VIDEO_MODEL, video_models)
         }
     })
 

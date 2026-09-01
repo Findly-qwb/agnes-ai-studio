@@ -66,7 +66,7 @@ export function Layout({ activeTab, onTabChange, children, onOpenSettings }: Lay
             {keyStatus ? '已配置' : '未配置 API Key'}
           </span>
         </header>
-        <main style={{ flex: 1, padding: activeTab === 'dramaFlow' ? 16 : 90, overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+        <main style={{ flex: 1, padding: 90, overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
           {children}
         </main>
       </div>

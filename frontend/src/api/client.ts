@@ -70,6 +70,7 @@ export const api = {
   flowRunDownstream: (flowId: string, nodeId: string) => req<any>(`/api/drama/flow/${flowId}/run-downstream`, { method: 'POST', body: JSON.stringify({ node_id: nodeId }) }),
   flowStop: (flowId: string) => req<any>(`/api/drama/flow/${flowId}/stop`, { method: 'POST' }),
   flowNodeEdit: (flowId: string, nodeId: string, body: any) => req<any>(`/api/drama/flow/${flowId}/node/${nodeId}/edit`, { method: 'POST', body: JSON.stringify(body) }),
+  flowNodeParams: (flowId: string, nodeId: string, params: any) => req<any>(`/api/drama/flow/${flowId}/node/${nodeId}/params`, { method: 'POST', body: JSON.stringify({ params }) }),
   flowReset: (flowId: string) => req<any>(`/api/drama/flow/${flowId}/reset`, { method: 'POST' }),
   flowDelete: (flowId: string) => req<any>(`/api/drama/flow/${flowId}`, { method: 'DELETE' }),
   flowAssetReplace: (flowId: string, assetIndex: number, file: File) => {

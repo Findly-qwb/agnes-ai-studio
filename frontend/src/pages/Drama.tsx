@@ -21,7 +21,7 @@ export function DramaPage() {
   const [prompt, setPrompt] = useState('')
   const [shotDuration, setShotDuration] = useState(5)
   const [textModel, setTextModel] = useState('agnes-2.5-flash')
-  const [imageModel, setImageModel] = useState('agnes-image-2.1-flash')
+  const [imageModel, setImageModel] = useState('agnes-image-2.5-flash')
   const [videoModel, setVideoModel] = useState('agnes-video-v2.0')
   const [charStyle, setCharStyle] = useState('anime')
   const [starting, setStarting] = useState(false)

@@ -14,7 +14,7 @@ export function ImagePage() {
   const toast = useToast()
   const models = useModels()
   const [prompt, setPrompt] = useState('')
-  const [model, setModel] = useState('agnes-image-2.1-flash')
+  const [model, setModel] = useState('agnes-image-2.5-flash')
   const [size, setSize] = useState('1024x1024')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)

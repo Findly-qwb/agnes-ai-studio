@@ -4,6 +4,7 @@ Agnes AI Studio - Flask 应用工厂
 
 import os
 import json
+import threading
 from flask import Flask, request
 from flask_cors import CORS
 from .config import get_base_path, ensure_output_dirs
@@ -12,7 +13,7 @@ from .config import get_base_path, ensure_output_dirs
 def _brief(value, max_len=120):
     """截断超长值（如 base64 图片），日志只保留可读部分"""
     s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-    return s if len(s) <= max_len else s[:max_len] + f'...(共{len(s)}字符)'
+    return s if len(s) <= max_len else s[:max_len] 
 
 
 def create_app():
@@ -41,6 +42,7 @@ def create_app():
     from .routes.drama_flow import flow_bp
     from .routes.files import files_bp
     from .routes.anchor import anchor_bp
+    from .routes.drama_flow import recover_inflight_shots
 
     app.register_blueprint(pages_bp)
     app.register_blueprint(config_bp)
@@ -51,13 +53,19 @@ def create_app():
     app.register_blueprint(files_bp)
     app.register_blueprint(anchor_bp)
 
+    # 回收重启前已提交到云端的镜头任务（inflight），救回已付费的生成结果
+    threading.Thread(target=recover_inflight_shots, daemon=True).start()
+
     @app.before_request
     def log_request_params():
         """打印所有写接口的入参，base64 等超长值自动截断"""
-        if request.method in ('POST', 'PUT', 'PATCH'):
-            data = request.get_json(silent=True) or {}
-            brief_body = {k: _brief(v) for k, v in data.items()}
-            files = list(request.files.keys())
-            print(f"[REQ] {request.method} {request.path} body={brief_body}" + (f" files={files}" if files else ''), flush=True)
+        if request.method not in ('POST', 'PUT', 'PATCH'):
+            return
+        if request.path.endswith('/graph'):
+            return  # 前端拖拽/编辑的自动保存，刷屏且无诊断价值
+        data = request.get_json(silent=True) or {}
+        brief_body = {k: _brief(v) for k, v in data.items()}
+        files = list(request.files.keys())
+        print(f"[REQ] {request.method} {request.path} body={brief_body}" + (f" files={files}" if files else ''), flush=True)
 
     return app

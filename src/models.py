@@ -19,14 +19,12 @@ TEXT_MODEL_OPTIONS = {
     'qwen-plus': 'Qwen Plus',
     'doubao-pro-32k': '豆包 Pro 32K',
     'doubao-lite-32k': '豆包 Lite 32K',
-    # Ollama 本地模型（常用）
-    'qwen2.5:7b': 'Ollama Qwen2.5 7B (本地)',
-    'qwen2.5:14b': 'Ollama Qwen2.5 14B (本地)',
-    'llama3.1:8b': 'Ollama Llama3.1 8B (本地)',
-    'mistral:7b': 'Ollama Mistral 7B (本地)',
+    # Ollama 模型不在此静态列出：裸名（如 mistral:7b）会被误路由到 Agnes 云端，
+    # 由 /api/drama/models 在 Ollama 启用且检测到后以 ollama:<name> 形式动态加入
 }
 IMAGE_MODEL_OPTIONS = {
-    'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash (推荐)',
+    'agnes-image-2.5-flash': 'Agnes Image 2.5 Flash (推荐，免费)',
+    'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash',
     'agnes-image-2.0-flash': 'Agnes Image 2.0 Flash',
     'gemini-3.1-flash-lite-image': 'Gemini 3.1 Flash Lite Image',
     'doubao-seedream-3-0': '豆包 Seedream 3.0',
@@ -41,7 +39,7 @@ VIDEO_MODEL_OPTIONS = {
     'qwen-video-gen': 'Qwen Video Gen',
 }
 DEFAULT_TEXT_MODEL = 'agnes-2.5-flash'
-DEFAULT_IMAGE_MODEL = 'agnes-image-2.1-flash'
+DEFAULT_IMAGE_MODEL = 'agnes-image-2.5-flash'
 DEFAULT_VIDEO_MODEL = 'agnes-video-2.5-flash'
 
 # ---------- 视频任务状态（内存存储，重启后丢失）----------

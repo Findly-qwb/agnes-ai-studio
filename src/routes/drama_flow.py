@@ -7,9 +7,11 @@
 """
 
 import os
+import re
 import json
 import time
 import uuid
+import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, request, jsonify
@@ -19,10 +21,12 @@ from ..models import ensure_drama_dirs, DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL,
 from ..services.text_model import (
     call_text_model, parse_json_from_text,
     story_system_prompt, script_system_prompt, storyboard_system_prompt, assets_system_prompt,
+    review_system_prompt,
     build_video_prompt, sanitize_image_prompt, translate_cn_to_en, is_mostly_chinese,
 )
 from ..services.gemini_image import is_gemini_image, generate_gemini_image
-from ..services.video_gen import download_and_save_file, run_video_job
+from ..services.video_gen import (download_and_save_file, run_video_job, query_video_task,
+                                  download_generated_video, extract_video_url)
 from ..services.video_merge import merge_videos, burn_chinese_subtitle
 from .drama import build_character_image_prompt, get_style_base, DEFAULT_CHARACTER_STYLE
 
@@ -33,7 +37,9 @@ flow_bp = Blueprint('drama_flow', __name__)
 flows = {}                       # flow_id -> flow dict
 flow_lock = threading.Lock()
 flow_stop_events = {}            # flow_id -> threading.Event
-flow_shot_overrides = {}         # (flow_id, shot_index) -> {prompt, images}
+flow_running = set()             # flow_id 正在执行整图/下游任务（防重复点击启动并发线程互相覆盖节点状态）
+# 镜头级 override 与云端在途任务存于 flow['shot_overrides'] / flow['inflight']，
+# 随 flow JSON 原子落盘，重启由 recover_inflight_shots 回收
 
 # 节点上游依赖类型（找最近的祖先节点输出）
 UPSTREAM = {
@@ -90,10 +96,16 @@ def _load_flow(flow_id):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             flow = json.load(f)
-        # 重启后 running 节点视为中断
+        # 重启后 running 节点视为中断；无在途云端任务的 generating 镜头标记失败
+        inflight_keys = {str(e.get('shot_index')) for e in (flow.get('inflight') or {}).values()}
         for n in flow.get('nodes', {}).values():
             if n.get('status') == 'running':
                 n['status'] = 'interrupted'
+            if n.get('type') == 'shots':
+                for r in ((n.get('output') or {}).get('results') or []):
+                    if r.get('status') == 'generating' and str(r.get('shot_index')) not in inflight_keys:
+                        r['status'] = 'failed'
+                        r['error'] = '服务重启中断'
         with flow_lock:
             flows[flow_id] = flow
         return flow
@@ -204,6 +216,101 @@ def _resolve_api_key(flow):
     return get_api_key()
 
 
+def _aborted(flow_id):
+    return flow_stop_events.get(flow_id, threading.Event()).is_set() or shutdown_event.is_set()
+
+
+def _node_params(flow, node):
+    """节点级参数覆盖：默认继承流参数，node['params'] 中的键优先（ComfyUI 式每节点独立配置）"""
+    return {**flow['params'], **(node.get('params') or {})}
+
+
+# ---------- 输入签名缓存（借鉴 comfy_execution/caching.py） ----------
+# sig = hash(节点类型 + 节点级覆盖参数 + 每个父节点的[输出哈希, 父sig])，递归到根。
+# 上游重跑但输出不变 → 下游 sig 命中 → 跳过执行（不重复烧钱）；
+# 输出变了 / 节点参数覆盖了 / 手动编辑了输出 → sig 失配 → 自动重跑。
+# 全局 flow.params 变化不参与 sig（与旧行为一致：completed 节点不因此重跑）。
+
+def _out_hash(node):
+    o = node.get('output')
+    if o is None:
+        return None
+    return hashlib.sha1(json.dumps(o, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:16]
+
+
+def _node_sig(flow, node_id):
+    node = flow['nodes'][node_id]
+    parents = sorted(e['source'] for e in flow['edges'] if e['target'] == node_id)
+    parts = [node['type'], node.get('params') or {}]
+    for p in parents:
+        pn = flow['nodes'].get(p)
+        if pn:
+            parts.append((p, _out_hash(pn), _node_sig(flow, p)))
+    return hashlib.sha1(json.dumps(parts, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:16]
+
+
+def _cache_hit(flow, node_id):
+    """已完成且 sig 一致 → 跳过。旧数据无 sig 字段：信任其 completed 状态并回填，避免升级后全图重跑"""
+    node = flow['nodes'].get(node_id)
+    if not node or node.get('status') != 'completed':
+        return False
+    if node.get('sig') is None:
+        node['sig'] = _node_sig(flow, node_id)
+        return True
+    return node['sig'] == _node_sig(flow, node_id)
+
+
+# ---------- 确定性时长引擎（借鉴 shuohao novel-script：台词 4.5 字/秒、动作节拍 2.5 秒） ----------
+CHARS_PER_SEC = 4.5
+ACTION_SECONDS = 2.5
+DUR_TIERS = [5, 10, 18]
+DUR_TOLERANCE = 1.15   # ±15%
+
+
+def _shot_est_seconds(shot):
+    dlg = re.sub(r'\s+', '', shot.get('dialogue') or '')
+    return len(dlg) / CHARS_PER_SEC + ACTION_SECONDS
+
+
+def _fit_shot_duration(shot, base_dur):
+    """台词装不下就自动升档（5→10→18），短台词保持基础档——不升档字幕与画面必然脱节"""
+    est = _shot_est_seconds(shot)
+    dur = base_dur
+    while est > dur * DUR_TOLERANCE:
+        nxt = next((t for t in DUR_TIERS if t > dur), None)
+        if nxt is None:
+            break
+        dur = nxt
+    return dur
+
+
+def _validate_shots(shots, base_dur):
+    """分镜产出后的确定性校验：返回 (逐镜升档警告, 无法救回的超限错误)"""
+    warnings, over = [], []
+    for s in shots:
+        est = _shot_est_seconds(s)
+        si = s.get('shot_index')
+        if est > DUR_TIERS[-1] * DUR_TOLERANCE:
+            over.append(f'镜头{si}台词约 {est:.0f} 秒，超过最长 {DUR_TIERS[-1]} 秒档容量，请拆分台词后重跑分镜')
+        elif est > base_dur * DUR_TOLERANCE:
+            fit = _fit_shot_duration(s, base_dur)
+            warnings.append(f'镜头{si}台词约 {est:.0f} 秒，生成时将自动用 {fit} 秒档')
+    return warnings, over
+
+
+def _crosscheck_refs(shots, assets):
+    """分镜引用的角色必须能在资产清单里找到（借鉴 refs-scenes 门）：
+    不匹配时 _match_assets 会静默回退第一个角色——视频换脸了没人知道，这里显式报出来"""
+    names = [a.get('name', '').lower().strip() for a in assets if a.get('name')]
+    warnings = []
+    for s in shots:
+        for c in s.get('characters', []):
+            cl = c.lower().strip()
+            if cl and not any(cl in n or n in cl for n in names):
+                warnings.append({'shot_index': s.get('shot_index'), 'kind': '角色', 'name': c})
+    return warnings
+
+
 def _run_prompt_node(flow, node):
     p = flow['params'].get('prompt', '').strip()
     if not p:
@@ -215,11 +322,11 @@ def _run_story_node(flow, node):
     up = _upstream_outputs(flow, node['id'], UPSTREAM['story'])
     src = up.get('prompt', {}).get('prompt', '')
     api_key = _resolve_api_key(flow)
-    text_model = flow['params'].get('text_model', DEFAULT_TEXT_MODEL)
+    text_model = _node_params(flow, node).get('text_model', DEFAULT_TEXT_MODEL)
     key = get_vendor_api_key(text_model, fallback_key=api_key)
     text = call_text_model(story_system_prompt(),
                            f"请根据以下描述，创作一个 300～500 字的短剧故事：\n{src}",
-                           key, model=text_model)
+                           key, model=text_model, abort_check=lambda: _aborted(flow['flow_id']))
     return {'text': text}
 
 
@@ -227,29 +334,55 @@ def _run_script_node(flow, node):
     up = _upstream_outputs(flow, node['id'], UPSTREAM['script'])
     story = up.get('story', {}).get('text', '') or up.get('prompt', {}).get('prompt', '')
     api_key = _resolve_api_key(flow)
-    text_model = flow['params'].get('text_model', DEFAULT_TEXT_MODEL)
+    text_model = _node_params(flow, node).get('text_model', DEFAULT_TEXT_MODEL)
     key = get_vendor_api_key(text_model, fallback_key=api_key)
     text = call_text_model(script_system_prompt(),
                            f"请将以下故事 1:1 精准还原为专业短剧剧本，要求画面描述详细，有 vo 的台词必须搭配画面，特写镜头要标注：\n\n{story}",
-                           key, model=text_model, max_tokens=8192)
+                           key, model=text_model, max_tokens=8192, abort_check=lambda: _aborted(flow['flow_id']))
     return {'text': text}
+
+
+def _review_shots(shots, key, text_model, flow_id):
+    """LLM 自审修复：按视频模型能力边界清单改一遍分镜（一次便宜调用，省下游贵的生成）。
+    解析失败或镜头数偏差 >30% 时保留原稿，绝不让审校毁掉产出"""
+    try:
+        rv = call_text_model(review_system_prompt(),
+                             json.dumps({'shots': shots}, ensure_ascii=False),
+                             key, model=text_model, max_tokens=16384, temperature=0.3,
+                             abort_check=lambda: _aborted(flow_id))
+        revised = (parse_json_from_text(rv) or {}).get('shots') or []
+        if revised and abs(len(revised) - len(shots)) <= max(2, len(shots) * 0.3):
+            print(f'[短剧流] 分镜自审修复：{len(shots)} → {len(revised)} 个镜头')
+            return revised
+        print('[短剧流] 分镜自审结果偏差过大，保留原稿')
+    except Exception as e:
+        if _aborted(flow_id) or '已中止' in str(e):
+            raise
+        print(f'[短剧流] 分镜自审跳过（{type(e).__name__}: {str(e)[:100]}）')
+    return shots
 
 
 def _run_storyboard_node(flow, node):
     up = _upstream_outputs(flow, node['id'], UPSTREAM['storyboard'])
     script = up.get('script', {}).get('text', '') or up.get('story', {}).get('text', '')
-    shot_dur = flow['params'].get('shot_duration', 5)
+    params = _node_params(flow, node)
+    shot_dur = params.get('shot_duration', 5)
     api_key = _resolve_api_key(flow)
-    text_model = flow['params'].get('text_model', DEFAULT_TEXT_MODEL)
+    text_model = params.get('text_model', DEFAULT_TEXT_MODEL)
     key = get_vendor_api_key(text_model, fallback_key=api_key)
     sb_text = call_text_model(storyboard_system_prompt(shot_dur),
                               f"请将以下剧本改写为分镜脚本，每个分镜约{shot_dur}秒：\n\n{script}",
-                              key, model=text_model, max_tokens=16384)
+                              key, model=text_model, max_tokens=16384, temperature=0.4,
+                              abort_check=lambda: _aborted(flow['flow_id']))
     sb = parse_json_from_text(sb_text)
     shots = sb.get('shots', [])
     if not shots:
         raise ValueError('分镜解析失败：未得到 shots')
-    return {'shots': shots}
+    shots = _review_shots(shots, key, text_model, flow['flow_id'])
+    warnings, over = _validate_shots(shots, shot_dur)
+    if over:
+        raise ValueError('；'.join(over[:5]))
+    return {'shots': shots, 'warnings': warnings}
 
 
 def _match_assets(shot, assets):
@@ -282,9 +415,9 @@ def _match_assets(shot, assets):
     return matched, primary
 
 
-def _generate_asset_image(flow, asset, idx, drama_id):
+def _generate_asset_image(flow, asset, idx, drama_id, params=None):
     """生成单个素材参考图，返回 (image_url, local_file, img_prompt)"""
-    params = flow['params']
+    params = params or flow['params']
     category = asset.get('category', 'characters')
     desc = asset.get('desc', '')
     style = params.get('character_style', DEFAULT_CHARACTER_STYLE)
@@ -298,14 +431,16 @@ def _generate_asset_image(flow, asset, idx, drama_id):
         img_prompt = (f"{get_style_base('scene', style)}"
                       f"16:9 horizontal composition, pure white background border. "
                       f"Scene environment design concept art, multiple angles view. "
-                      f"Scene description: {desc}. Highly detailed environment, consistent style, no characters.")
+                      f"Scene description: {desc}. Highly detailed environment, consistent style. "
+                      f"Absolutely no people anywhere. THE SPACE MUST BE IDENTICAL ACROSS ALL PANELS.")
         img_size = '1344x768'
     else:
         img_prompt = (f"{get_style_base('prop', style)}"
                       f"9:16 vertical composition, pure white minimalist background, premium prop design board layout. "
                       f"Multiple views: front, side, back, top, detail close-ups. "
                       f"Material and texture details clearly visible. Prop description: {desc}. "
-                      f"Consistent design, no deformation.")
+                      f"Consistent design, no deformation. Pure white background, no people, no hands anywhere in frame, "
+                      f"clear real-world scale reference.")
         img_size = '768x1344'
     img_prompt = sanitize_image_prompt(img_prompt)
     image_model = params.get('image_model', DEFAULT_IMAGE_MODEL)
@@ -337,12 +472,19 @@ def _generate_asset_image(flow, asset, idx, drama_id):
                 last_err = f'响应无 url: {json.dumps(result, ensure_ascii=False)[:200]}'
             elif resp.status_code in (429, 503, 433):
                 last_err = f'限流 {resp.status_code}'
-                time.sleep(15 * (attempt + 1))
+                for _ in range(15 * (attempt + 1)):
+                    if _aborted(flow['flow_id']):
+                        raise RuntimeError('已中止')
+                    time.sleep(1)
                 continue
             else:
                 last_err = f'API {resp.status_code}: {resp.text[:200]}'
+        except RuntimeError:
+            raise
         except Exception as e:
             last_err = f'{type(e).__name__}: {e}'
+        if _aborted(flow['flow_id']):
+            raise RuntimeError('已中止')
         time.sleep(3)
     raise RuntimeError(f'素材 [{asset.get("name", idx)}] 生图失败: {last_err}')
 
@@ -353,12 +495,14 @@ def _run_assets_node(flow, node):
     script = up.get('script', {}).get('text', '')
     sb = up.get('storyboard', {}).get('shots', [])
     api_key = _resolve_api_key(flow)
-    text_model = flow['params'].get('text_model', DEFAULT_TEXT_MODEL)
+    params = _node_params(flow, node)
+    text_model = params.get('text_model', DEFAULT_TEXT_MODEL)
     key = get_vendor_api_key(text_model, fallback_key=api_key)
     assets_text = call_text_model(assets_system_prompt(),
                                   f"请从以下剧本和分镜中提取所有角色、场景、道具的视觉特征描述：\n"
                                   f"剧本：\n{script}\n\n分镜：\n{json.dumps(sb, ensure_ascii=False)}",
-                                  key, model=text_model, max_tokens=16384)
+                                  key, model=text_model, max_tokens=16384,
+                                  abort_check=lambda: _aborted(flow['flow_id']))
     raw = parse_json_from_text(assets_text)
     all_assets = []
     for cat in ('characters', 'scenes', 'props'):
@@ -374,8 +518,9 @@ def _run_assets_node(flow, node):
     for idx, asset in enumerate(all_assets):
         if flow_stop_events.get(flow['flow_id'], threading.Event()).is_set() or shutdown_event.is_set():
             raise RuntimeError('已中止')
+        _set_node(flow['flow_id'], node['id'], status='running', error='')  # 下载中保持 running，前端显示 loading
         try:
-            url, local, img_prompt = _generate_asset_image(flow, asset, idx, drama_id)
+            url, local, img_prompt = _generate_asset_image(flow, asset, idx, drama_id, params)
             asset['image_url'], asset['local_file'], asset['img_prompt'] = url, local, img_prompt
             ok += 1
         except Exception as e:
@@ -387,16 +532,19 @@ def _run_assets_node(flow, node):
             flow['nodes'][node['id']]['output'] = {'assets': all_assets, 'progress': f'{ok + len(failed)}/{len(all_assets)}'}
     if ok == 0:
         raise RuntimeError(f'全部 {len(all_assets)} 个素材生图失败')
-    return {'assets': all_assets, 'failed': failed}
+    ref_warnings = _crosscheck_refs(sb, all_assets)
+    if ref_warnings:
+        print(f'[短剧流 {flow["flow_id"]}] 素材对账：{len(ref_warnings)} 个分镜角色在资产清单中找不到，镜头生成将回退默认角色参考')
+    return {'assets': all_assets, 'failed': failed, 'ref_warnings': ref_warnings}
 
 
-def _run_shot_video(flow, shot, drama_id):
+def _run_shot_video(flow, shot, drama_id, params=None):
     """生成单镜头视频（含字幕烧录），返回结果 dict"""
     shot_index = shot.get('shot_index')
-    params = flow['params']
+    params = params or flow['params']
     all_assets = flow['_shot_assets_cache']
-    override = flow_shot_overrides.get((flow['flow_id'], shot_index), {})
-    shot_dur = params.get('shot_duration', 5)
+    override = (flow.get('shot_overrides') or {}).get(str(shot_index)) or {}
+    shot_dur = _fit_shot_duration(shot, params.get('shot_duration', 5))
     num_frames = {5: 121, 10: 241, 18: 441}.get(shot_dur, 121)
     flow_id = flow['flow_id']
     abort = lambda: flow_stop_events.get(flow_id, threading.Event()).is_set() or shutdown_event.is_set()
@@ -423,17 +571,35 @@ def _run_shot_video(flow, shot, drama_id):
         matched, primary = _match_assets(shot, all_assets)
         extra = []
 
+    video_model = params.get('video_model', DEFAULT_VIDEO_MODEL)
+    save_subdir = f'dramas/{drama_id}/videos'
+
+    def _on_submit(ids):
+        """提交成功即落盘 inflight，服务重启后可回收云端已付费的生成结果"""
+        with flow_lock:
+            flow.setdefault('inflight', {})[str(shot_index)] = {
+                **ids, 'shot_index': shot_index, 'prompt': prompt, 'prompt_cn': prompt_cn,
+                'primary_image': primary, 'video_model': video_model,
+                'save_subdir': save_subdir, 'saved_at': time.time()}
+        _persist(flow_id)
+
     res = run_video_job(
-        params.get('video_model', DEFAULT_VIDEO_MODEL), prompt,
+        video_model, prompt,
         primary_image=primary, extra_images=extra, num_frames=num_frames,
         api_key=_resolve_api_key(flow),
         negative_prompt='text, subtitles, captions, labels, letters, words, watermark, any text overlay',
-        width=768, height=1152, save_subdir=f'dramas/{drama_id}/videos',
-        prefix=f'shot_{shot_index}', abort_check=abort)
+        width=768, height=1152, save_subdir=save_subdir,
+        prefix=f'shot_{shot_index}', abort_check=abort, on_submit=_on_submit)
+
+    # 任务结束（成功/失败/中止）清 inflight；服务关闭时保留，交由重启回收
+    if not shutdown_event.is_set():
+        with flow_lock:
+            flow.get('inflight', {}).pop(str(shot_index), None)
+        _persist(flow_id)
 
     if res['ok'] and shot.get('dialogue'):
         try:
-            full = os.path.join(get_app_dir(), 'dramas', drama_id, 'videos', res['local_file'])
+            full = os.path.join(get_app_dir(), save_subdir, res['local_file'])
             if os.path.exists(full):
                 burn_chinese_subtitle(full, shot['dialogue'])
         except Exception as e:
@@ -443,6 +609,18 @@ def _run_shot_video(flow, shot, drama_id):
             'local_file': res['local_file'], 'video_url': res['video_url'],
             'error': res['error'], 'prompt': prompt, 'prompt_cn': prompt_cn,
             'primary_image': primary}
+
+
+def _reuse_completed_shots(flow, node, shots, drama_id):
+    """已有 completed 且本地文件存在的镜头结果 → 直接复用，重跑不重复烧钱"""
+    videos_dir = os.path.join(get_app_dir(), 'dramas', drama_id, 'videos')
+    reused = {}
+    for r in ((node.get('output') or {}).get('results') or []):
+        si = r.get('shot_index')
+        if (r.get('status') == 'completed' and r.get('local_file')
+                and os.path.exists(os.path.join(videos_dir, r['local_file']))):
+            reused[si] = r
+    return reused
 
 
 def _run_shots_node(flow, node):
@@ -455,7 +633,10 @@ def _run_shots_node(flow, node):
     ensure_drama_dirs(drama_id)
     flow['_shot_assets_cache'] = assets
 
-    results = {}
+    results = dict(_reuse_completed_shots(flow, node, shots, drama_id))
+    todo_shots = [s for s in shots if s.get('shot_index') not in results]
+    if results:
+        print(f'[短剧流 {flow["flow_id"]}] 复用 {len(results)} 个已完成镜头，跳过生成')
     lock = threading.Lock()
 
     def _update_output():
@@ -465,10 +646,11 @@ def _run_shots_node(flow, node):
             flow['nodes'][node['id']]['output'] = {'results': snapshot}
 
     _update_output()
-    max_workers = int(flow['params'].get('shot_workers', 2))
+    params = _node_params(flow, node)
+    max_workers = int(params.get('shot_workers', 2))
     aborted = flow_stop_events.get(flow['flow_id'], threading.Event())
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futs = {pool.submit(_run_shot_video, flow, s, drama_id): s for s in shots}
+        futs = {pool.submit(_run_shot_video, flow, s, drama_id, params): s for s in todo_shots}
         for fut, shot in futs.items():
             si = shot.get('shot_index')
             try:
@@ -492,7 +674,7 @@ def _run_merge_node(flow, node):
     drama_id = flow['drama_id']
     up = _upstream_outputs(flow, node['id'], UPSTREAM['merge'])
     results = up.get('shots', {}).get('results', [])
-    order = flow['params'].get('merge_order') or None
+    order = _node_params(flow, node).get('merge_order') or None
     merged = merge_videos(drama_id, results, shot_order=order, output_prefix='flow_merged')
     if not merged:
         raise RuntimeError('合并失败：成功视频不足 2 个或 ffmpeg 不可用')
@@ -509,19 +691,26 @@ NODE_RUNNERS = {
 
 
 def _execute_node(flow_id, node_id):
-    """执行单节点：running → completed/failed。返回 True=成功"""
+    """执行单节点：running → completed/failed；输入签名命中则跳过。返回 True=成功"""
     _set_node(flow_id, node_id, status='running', error='')
     with flow_lock:
         flow = flows.get(flow_id)
         node = flow['nodes'][node_id] if flow else None
     if not node:
         return False
+    if _cache_hit(flow, node_id):
+        _set_node(flow_id, node_id, status='completed')
+        _persist(flow_id)
+        print(f'[短剧流 {flow_id}] 节点 {node["type"]}({node_id}) 输入未变，缓存命中跳过')
+        return True
     try:
         runner = NODE_RUNNERS.get(node['type'])
         if not runner:
             raise ValueError(f'未知节点类型: {node["type"]}')
         output = runner(flow, node)
-        _set_node(flow_id, node_id, status='completed', output=output, error='')
+        with flow_lock:
+            sig = _node_sig(flows[flow_id], node_id)
+        _set_node(flow_id, node_id, status='completed', output=output, error='', sig=sig)
         _mark_stale(flow_id, node_id)
         print(f'[短剧流 {flow_id}] 节点 {node["type"]}({node_id}) 完成')
         return True
@@ -531,29 +720,51 @@ def _execute_node(flow_id, node_id):
         return False
 
 
+def _upstream_pending(flow, node_id):
+    """ComfyUI 式 run-from-node：沿边收集所有未完成的祖先，先补齐再跑目标节点"""
+    parents = {}
+    for e in flow['edges']:
+        parents.setdefault(e['target'], []).append(e['source'])
+    need, visited, queue = [], set(), list(parents.get(node_id, []))
+    while queue:
+        cur = queue.pop(0)
+        if cur in visited:
+            continue
+        visited.add(cur)
+        n = flow['nodes'].get(cur)
+        if n and not _cache_hit(flow, cur):
+            need.append(cur)
+        queue.extend(parents.get(cur, []))
+    return need + [node_id]
+
+
 def _run_graph(flow_id, node_ids):
     """按拓扑序执行给定节点子集，任一失败即停"""
-    with flow_lock:
-        flow = flows.get(flow_id)
-        if not flow:
+    try:
+        with flow_lock:
+            flow = flows.get(flow_id)
+            if not flow:
+                return
+            order = _topo_order(flow['nodes'], flow['edges'], node_ids)
+        if order is None:
+            _set_node(flow_id, node_ids[0] if node_ids else '', status='failed', error='图中存在环路')
             return
-        order = _topo_order(flow['nodes'], flow['edges'], node_ids)
-    if order is None:
-        _set_node(flow_id, node_ids[0] if node_ids else '', status='failed', error='图中存在环路')
-        return
-    for nid in order:
-        if flow_stop_events.get(flow_id, threading.Event()).is_set() or shutdown_event.is_set():
-            with flow_lock:
-                f = flows.get(flow_id)
-                if f:
-                    for n in f['nodes'].values():
-                        if n['status'] in ('pending', 'running'):
-                            n['status'] = 'stopped'
-            _persist(flow_id)
-            return
-        ok = _execute_node(flow_id, nid)
-        if not ok:
-            return
+        for nid in order:
+            if flow_stop_events.get(flow_id, threading.Event()).is_set() or shutdown_event.is_set():
+                with flow_lock:
+                    f = flows.get(flow_id)
+                    if f:
+                        for n in f['nodes'].values():
+                            if n['status'] in ('pending', 'running'):
+                                n['status'] = 'stopped'
+                _persist(flow_id)
+                return
+            ok = _execute_node(flow_id, nid)
+            if not ok:
+                return
+    finally:
+        with flow_lock:
+            flow_running.discard(flow_id)
 
 
 # ==================== API ====================
@@ -649,7 +860,10 @@ def flow_save_graph(flow_id):
             merged = {}
             for n in data['nodes']:
                 nid = n['id']
-                old = flow['nodes'].get(nid, {})
+                old = flow['nodes'].get(nid)
+                if old is None:
+                    # 前端新增节点：补齐执行引擎依赖的默认字段
+                    old = {'status': 'pending', 'output': None, 'error': '', 'updated_at': 0}
                 old.update({'id': nid, 'type': n.get('type', old.get('type')),
                             'pos': n.get('pos', old.get('pos', {'x': 0, 'y': 0}))})
                 merged[nid] = old
@@ -679,10 +893,13 @@ def flow_run(flow_id):
     if node_id:
         if node_id not in flow['nodes']:
             return jsonify({'success': False, 'error': '节点不存在'}), 404
-        todo = [node_id]
+        todo = _upstream_pending(flow, node_id)
     else:
-        todo = [nid for nid, n in flow['nodes'].items()
-                if n['status'] != 'completed' or force]
+        todo = [nid for nid in flow['nodes'] if force or not _cache_hit(flow, nid)]
+    with flow_lock:
+        if flow_id in flow_running:
+            return jsonify({'success': False, 'error': '流程正在运行中，请等待完成'}), 409
+        flow_running.add(flow_id)
     flow_stop_events[flow_id] = threading.Event()
     with flow_lock:
         for nid in todo:
@@ -702,6 +919,10 @@ def flow_run_downstream(flow_id):
     if node_id not in flow['nodes']:
         return jsonify({'success': False, 'error': '节点不存在'}), 404
     todo = [node_id] + _downstream_ids(flow['nodes'], flow['edges'], node_id)
+    with flow_lock:
+        if flow_id in flow_running:
+            return jsonify({'success': False, 'error': '流程正在运行中，请等待完成'}), 409
+        flow_running.add(flow_id)
     flow_stop_events[flow_id] = threading.Event()
     with flow_lock:
         for nid in todo:
@@ -714,6 +935,27 @@ def flow_run_downstream(flow_id):
 @flow_bp.route('/api/drama/flow/<flow_id>/stop', methods=['POST'])
 def flow_stop(flow_id):
     flow_stop_events.setdefault(flow_id, threading.Event()).set()
+    return jsonify({'success': True})
+
+
+@flow_bp.route('/api/drama/flow/<flow_id>/node/<node_id>/params', methods=['POST'])
+def flow_node_params(flow_id, node_id):
+    """节点级参数覆盖（模型/时长/风格等），未覆盖的键继承 flow 参数"""
+    flow = _load_flow(flow_id)
+    if not flow:
+        return jsonify({'success': False, 'error': '流不存在'}), 404
+    data = request.get_json(silent=True) or {}
+    with flow_lock:
+        node = flow['nodes'].get(node_id)
+        if not node:
+            return jsonify({'success': False, 'error': '节点不存在'}), 404
+        params = data.get('params') or {}
+        for k in ('shot_duration', 'shot_workers'):
+            if k in params:
+                params[k] = int(params[k])
+        node['params'] = params
+        node['updated_at'] = time.time()
+    _persist(flow_id)
     return jsonify({'success': True})
 
 
@@ -801,7 +1043,8 @@ def flow_asset_regenerate(flow_id):
         asset['desc'] = custom_desc
         asset['prompt_en'] = ''
     try:
-        url, local, img_prompt = _generate_asset_image(flow, asset, idx, flow['drama_id'])
+        url, local, img_prompt = _generate_asset_image(flow, asset, idx, flow['drama_id'],
+                                                        _node_params(flow, node))
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
     with flow_lock:
@@ -816,6 +1059,8 @@ def flow_asset_regenerate(flow_id):
 # ---------- 镜头操作 ----------
 
 def _shots_node_of(flow):
+    # ponytail: 单镜头操作按类型路由到第一个有输出的 shots 节点；
+    # 多个 shots 节点并行对比时需给 shot 端点传 node_id
     for nid, n in flow['nodes'].items():
         if n['type'] == 'shots':
             return nid, n
@@ -843,10 +1088,12 @@ def flow_shot_run(flow_id):
         return jsonify({'success': False, 'error': f'镜头 {shot_index} 不存在'}), 404
 
     if data.get('custom_prompt') or data.get('custom_images'):
-        flow_shot_overrides[(flow_id, shot_index)] = {
-            'custom_prompt': data.get('custom_prompt', ''),
-            'custom_images': data.get('custom_images'),
-        }
+        with flow_lock:
+            flow.setdefault('shot_overrides', {})[str(shot_index)] = {
+                'custom_prompt': data.get('custom_prompt', ''),
+                'custom_images': data.get('custom_images'),
+            }
+        _persist(flow_id)
 
     sh_nid, sh_node = _shots_node_of(flow)
     if not sh_node:
@@ -867,7 +1114,7 @@ def flow_shot_run(flow_id):
 
     def _job():
         try:
-            r = _run_shot_video(flow, shot, flow['drama_id'])
+            r = _run_shot_video(flow, shot, flow['drama_id'], _node_params(flow, sh_node))
         except Exception as e:
             r = {'shot_index': shot_index, 'status': 'failed', 'error': str(e)[:300]}
         with flow_lock:
@@ -897,9 +1144,10 @@ def flow_shot_image_upload(flow_id):
     filename = f'shot_{shot_index}_ref_{uuid.uuid4().hex[:6]}{ext}'
     file.save(os.path.join(base, 'images', filename))
     image_url = f'/dramas/{flow["drama_id"]}/images/{filename}'
-    ov = flow_shot_overrides.setdefault((flow_id, shot_index), {})
-    ov.setdefault('custom_images', [])
-    ov['custom_images'] = (ov['custom_images'] or []) + [{'image_url': image_url, 'local_file': filename}]
+    with flow_lock:
+        ov = flow.setdefault('shot_overrides', {}).setdefault(str(shot_index), {})
+        ov['custom_images'] = (ov.get('custom_images') or []) + [{'image_url': image_url, 'local_file': filename}]
+    _persist(flow_id)
     return jsonify({'success': True, 'image_url': image_url, 'filename': filename})
 
 
@@ -914,11 +1162,14 @@ def flow_shot_image_delete(flow_id):
         image_index = int(data.get('image_index'))
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': '缺少参数'}), 400
-    ov = flow_shot_overrides.get((flow_id, shot_index), {})
-    imgs = ov.get('custom_images') or []
-    if 0 <= image_index < len(imgs):
-        imgs.pop(image_index)
-    return jsonify({'success': True, 'remaining': len(imgs)})
+    with flow_lock:
+        ov = (flow.get('shot_overrides') or {}).get(str(shot_index)) or {}
+        imgs = ov.get('custom_images') or []
+        if 0 <= image_index < len(imgs):
+            imgs.pop(image_index)
+        remaining = len(imgs)
+    _persist(flow_id)
+    return jsonify({'success': True, 'remaining': remaining})
 
 
 @flow_bp.route('/api/drama/flow/<flow_id>/shot/detail', methods=['GET'])
@@ -940,7 +1191,7 @@ def flow_shot_detail(flow_id):
         return jsonify({'success': False, 'error': '镜头不存在'}), 404
     result = next((r for r in (sh_node['output'].get('results', []) if sh_node and sh_node.get('output') else [])
                    if r.get('shot_index') == shot_index), None)
-    ov = flow_shot_overrides.get((flow_id, shot_index), {})
+    ov = (flow.get('shot_overrides') or {}).get(str(shot_index)) or {}
     auto_refs = []
     if assets_node:
         matched, primary = _match_assets(shot, assets_node['output']['assets'])
@@ -1043,3 +1294,110 @@ def flow_template_delete(name):
     if os.path.exists(path):
         os.remove(path)
     return jsonify({'success': True})
+
+
+# ---------- 启动回收：重启前已在云端生成的镜头任务 ----------
+
+RECOVER_MAX_POLLS = 120          # 10s × 120 = 20 分钟，与 run_video_job 轮询上限一致
+
+
+def _recovered_result(entry, local_file='', video_url='', error=''):
+    si = entry.get('shot_index')
+    return {'shot_index': si, 'status': 'completed' if local_file else 'failed',
+            'local_file': local_file or None, 'video_url': video_url, 'error': error,
+            'prompt': entry.get('prompt', ''), 'prompt_cn': entry.get('prompt_cn', ''),
+            'primary_image': entry.get('primary_image', ''), 'recovered': True}
+
+
+def _recover_finish(flow_id, entry, result):
+    """写回 shots 节点 output 并清理 inflight"""
+    si = entry.get('shot_index')
+    flow = _load_flow(flow_id)
+    if not flow:
+        return
+    with flow_lock:
+        (flow.get('inflight') or {}).pop(str(si), None)
+        nid = next((i for i, n in flow['nodes'].items() if n['type'] == 'shots'), None)
+        if nid:
+            node = flow['nodes'][nid]
+            if node.get('output') is None:
+                node['output'] = {'results': []}
+            results = node['output'].setdefault('results', [])
+            results[:] = [r for r in results if r.get('shot_index') != si]
+            results.append(result)
+    _persist(flow_id)
+    if result['status'] == 'completed' and result.get('local_file'):
+        try:
+            sb = next((n for n in flow['nodes'].values()
+                       if n['type'] == 'storyboard' and n.get('output')), None)
+            shot = next((s for s in ((sb or {}).get('output') or {}).get('shots', [])
+                         if s.get('shot_index') == si), None)
+            if shot and shot.get('dialogue'):
+                burn_chinese_subtitle(os.path.join(get_app_dir(), entry['save_subdir'],
+                                                   result['local_file']), shot['dialogue'])
+        except Exception as e:
+            print(f'[短剧流] 回收镜头{si} 字幕烧录异常: {e}')
+    print(f'[短剧流 {flow_id}] 回收镜头 {si} -> {result["status"]}')
+
+
+def _recover_shot_task(flow_id, key, entry):
+    """轮询一个在途云端任务直至有结论（后台线程）"""
+    model = entry.get('video_model') or DEFAULT_VIDEO_MODEL
+    base_url = get_vendor_base_url(model)
+    headers = {'Authorization': f"Bearer {get_vendor_api_key(model, fallback_key=get_api_key())}",
+               'Content-Type': 'application/json'}
+    for _ in range(RECOVER_MAX_POLLS):
+        if shutdown_event.wait(timeout=10):
+            return  # 服务再次关闭：inflight 留在磁盘，下次启动继续回收
+        try:
+            poll = query_video_task(model, base_url, headers,
+                                    task_id=entry.get('task_id'), video_id=entry.get('video_id'))
+        except Exception:
+            continue
+        if poll.status_code == 404:
+            _recover_finish(flow_id, entry, _recovered_result(entry, error='云端任务不存在或已过期'))
+            return
+        if poll.status_code != 200:
+            continue
+        try:
+            pr = poll.json()
+        except Exception:
+            continue
+        st = pr.get('status', '')
+        if st == 'completed':
+            v_video_id = pr.get('video_id', '') or entry.get('video_id', '')
+            v_url = extract_video_url(pr)
+            local = download_generated_video(model, base_url, headers, entry.get('task_id'),
+                                             v_video_id, v_url, entry.get('save_subdir', 'videos'),
+                                             f"shot_{entry.get('shot_index')}")
+            _recover_finish(flow_id, entry,
+                            _recovered_result(entry, local_file=local or '', video_url=v_url,
+                                              error='' if local else '回收下载失败'))
+            return
+        if st == 'failed':
+            _recover_finish(flow_id, entry, _recovered_result(entry, error=pr.get('error', '云端任务失败')))
+            return
+    _recover_finish(flow_id, entry, _recovered_result(entry, error='回收轮询超时(20分钟)'))
+
+
+def recover_inflight_shots():
+    """create_app 启动钩子：扫描已落盘 flow 的 inflight，救回已付费的云端结果"""
+    try:
+        count = 0
+        for fn in os.listdir(_flows_dir()):
+            if not fn.endswith('.json'):
+                continue
+            fid = fn[:-5]
+            flow = _load_flow(fid)
+            if not flow:
+                continue
+            for key, entry in list((flow.get('inflight') or {}).items()):
+                print(f'[短剧流 {fid}] 恢复在途镜头任务 shot={entry.get("shot_index")} '
+                      f'task={entry.get("task_id") or entry.get("video_id")}')
+                threading.Thread(target=_recover_shot_task, args=(fid, key, entry), daemon=True).start()
+                count += 1
+        if count:
+            print(f'[短剧流] 已启动 {count} 个镜头任务回收线程')
+    except Exception as e:
+        print(f'[短剧流] 启动回收异常: {e}')
+

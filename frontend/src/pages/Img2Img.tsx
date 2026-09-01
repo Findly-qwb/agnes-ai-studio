@@ -21,7 +21,7 @@ export function Img2ImgPage() {
   const [prompt, setPrompt] = useState('')
   const [imageUrl, setImageUrl] = useState('')
   const [size, setSize] = useState('1024x1024')
-  const [model, setModel] = useState('agnes-image-2.1-flash')
+  const [model, setModel] = useState('agnes-image-2.5-flash')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [previewUrl, setPreviewUrl] = useState('')

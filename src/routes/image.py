@@ -62,7 +62,7 @@ def generate_image():
 
     size = data.get('size', '1024x1024')
     ratio = data.get('ratio')
-    model = data.get('model', 'agnes-image-2.1-flash')
+    model = data.get('model', 'agnes-image-2.5-flash')
     save_local = data.get('save_local', True)
 
     try:
@@ -145,7 +145,7 @@ def img2img():
     size = data.get('size', '1024x768')
     ratio = data.get('ratio')
     save_local = data.get('save_local', True)
-    model = data.get('model', 'agnes-image-2.1-flash')
+    model = data.get('model', 'agnes-image-2.5-flash')
 
     try:
         # Gemini 原生图像模型：图生图通过多模态 contents 传入

@@ -34,6 +34,8 @@ export const secondsToFrames = (seconds: number, fps: number) =>
 // 2.1 模型走档位尺寸（1K-4K）+ 宽高比；2.0 模型只支持精确像素尺寸
 const TIER_SIZES = ['1K', '2K', '3K', '4K']
 const IMAGE_RATIOS = ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9']
+// 支持 1K/2K 档位 + ratio 的 Agnes 图像模型（2.5 与 2.1 请求参数完全一致）
+const TIERED_IMAGE_MODELS = new Set(['agnes-image-2.1-flash', 'agnes-image-2.5-flash'])
 
 interface Props {
   busy?: boolean
@@ -64,11 +66,11 @@ export function PromptInput({ busy, onSubmit }: Props) {
   const modelOptions = mode === 'video' ? models?.video_models : models?.image_models
   const modelDefault = mode === 'video'
     ? (models?.defaults?.video_model || 'agnes-video-2.5-flash')
-    : (models?.defaults?.image_model || 'agnes-image-2.1-flash')
+    : (models?.defaults?.image_model || 'agnes-image-2.5-flash')
 
   useEffect(() => {
     if (models) {
-      setImageModel(models.defaults?.image_model || 'agnes-image-2.1-flash')
+      setImageModel(models.defaults?.image_model || 'agnes-image-2.5-flash')
       setVideoModel(models.defaults?.video_model || 'agnes-video-2.5-flash')
     }
   }, [models])
@@ -101,7 +103,7 @@ export function PromptInput({ busy, onSubmit }: Props) {
   const submit = () => {
     if (!prompt.trim()) { toast.show('请输入描述', 'error'); return }
     if (mode === 'img2img' && !attach) { toast.show('图生图需要先上传参考图', 'error'); return }
-    const tiered = (model || modelDefault) === 'agnes-image-2.1-flash'
+    const tiered = TIERED_IMAGE_MODELS.has(model || modelDefault)
     onSubmit({
       mode, prompt, model: model || modelDefault,
       size: mode === 'video' || tiered ? size : legacySize,
@@ -154,7 +156,7 @@ export function PromptInput({ busy, onSubmit }: Props) {
           {Object.entries(modelOptions || {}).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
         </select>
         {mode !== 'video' ? (
-          (model || modelDefault) === 'agnes-image-2.1-flash' ? (
+          TIERED_IMAGE_MODELS.has(model || modelDefault) ? (
             <>
               <select className="composer-size" value={size} onChange={e => setSize(e.target.value)} title="分辨率档位">
                 {TIER_SIZES.map(s => <option key={s} value={s}>{s}</option>)}

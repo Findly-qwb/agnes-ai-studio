@@ -236,13 +236,46 @@ def download_and_save_file(url, subdir, prefix, ext, max_retries=3):
     return None
 
 
+def extract_video_url(result):
+    """从任务响应 JSON 提取视频 URL（多字段兼容）"""
+    url = (result.get('video_url') or result.get('url') or result.get('output_url')
+           or result.get('video') or '')
+    if not url and isinstance(result.get('data'), dict):
+        url = result['data'].get('url', '') or result['data'].get('video_url', '')
+    return url
+
+
+def download_generated_video(video_model, base_url, headers, task_id, video_id,
+                             video_url, save_subdir, prefix):
+    """下载已完成的云端视频：URL → content 端点 → video_id 三路回退，返回文件名或 None"""
+    local = None
+    if video_url:
+        local = download_and_save_file(video_url, save_subdir, prefix, 'mp4')
+    if not local:
+        try:
+            cr = requests.get(f'{base_url}/videos/{task_id}/content', headers=headers, timeout=30)
+            if cr.status_code == 200:
+                cd = cr.json()
+                c_url = (cd.get('url') or cd.get('video_url') or cd.get('video') or '')
+                if not c_url and isinstance(cd.get('data'), dict):
+                    c_url = cd['data'].get('url', '') or cd['data'].get('video_url', '')
+                if c_url:
+                    local = download_and_save_file(c_url, save_subdir, prefix, 'mp4')
+        except Exception:
+            pass
+    if not local and video_id:
+        local = download_video_by_video_id(video_id, base_url, headers, save_subdir, prefix, video_model)
+    return local
+
+
 def run_video_job(video_model, prompt, primary_image='', extra_images=None, num_frames=121,
                   frame_rate=24, api_key='', negative_prompt='', width=768, height=1152,
-                  save_subdir='videos', prefix='shot', abort_check=None):
+                  save_subdir='videos', prefix='shot', abort_check=None, on_submit=None):
     """提交单个视频任务并轮询等待完成，随后下载保存。
 
     Args:
         abort_check: 可选回调，返回 True 时中止（返回 error='已中止'）
+        on_submit: 可选回调，提交成功拿到 task_id 瞬间收到 {'task_id', 'video_id'}
 
     Returns:
         {'ok': bool, 'local_file': str|None, 'video_url': str, 'error': str}
@@ -284,6 +317,11 @@ def run_video_job(video_model, prompt, primary_image='', extra_images=None, num_
             return {'ok': False, 'local_file': None, 'video_url': '', 'error': f'API {resp.status_code}: {resp.text[:300]}'}
     if not vtask_id:
         return {'ok': False, 'local_file': None, 'video_url': '', 'error': '视频任务提交失败'}
+    if on_submit:
+        try:
+            on_submit({'task_id': vtask_id, 'video_id': v_video_id})
+        except Exception as e:
+            print(f"[视频任务] on_submit 回调异常: {e}")
 
     # 轮询（10s × 120 = 20 分钟上限）
     v_url = ''
@@ -299,10 +337,7 @@ def run_video_job(video_model, prompt, primary_image='', extra_images=None, num_
             pr = poll.json()
             st = pr.get('status', '')
             if st == 'completed':
-                v_url = (pr.get('video_url') or pr.get('url') or pr.get('output_url')
-                         or pr.get('video') or '')
-                if not v_url and isinstance(pr.get('data'), dict):
-                    v_url = pr['data'].get('url', '') or pr['data'].get('video_url', '')
+                v_url = extract_video_url(pr)
                 v_video_id = pr.get('video_id', '') or v_video_id
                 break
             elif st == 'failed':
@@ -314,24 +349,8 @@ def run_video_job(video_model, prompt, primary_image='', extra_images=None, num_
         return {'ok': False, 'local_file': None, 'video_url': '', 'error': '轮询超时(20分钟)'}
 
     # 下载三路回退：URL → content 端点 → video_id
-    local = None
-    if v_url:
-        local = download_and_save_file(v_url, save_subdir, prefix, 'mp4')
-    if not local:
-        try:
-            cr = requests.get(f'{base_url}/videos/{vtask_id}/content', headers=headers, timeout=30)
-            if cr.status_code == 200:
-                cd = cr.json()
-                c_url = (cd.get('url') or cd.get('video_url') or cd.get('video') or '')
-                if not c_url and isinstance(cd.get('data'), dict):
-                    c_url = cd['data'].get('url', '') or cd['data'].get('video_url', '')
-                if c_url:
-                    local = download_and_save_file(c_url, save_subdir, prefix, 'mp4')
-        except Exception:
-            pass
-    if not local and v_video_id:
-        local = download_video_by_video_id(v_video_id, base_url, headers, save_subdir, prefix, video_model)
-
+    local = download_generated_video(video_model, base_url, headers, vtask_id,
+                                     v_video_id, v_url, save_subdir, prefix)
     if not local:
         return {'ok': False, 'local_file': None, 'video_url': v_url, 'error': '视频下载失败'}
     return {'ok': True, 'local_file': local, 'video_url': v_url, 'error': ''}

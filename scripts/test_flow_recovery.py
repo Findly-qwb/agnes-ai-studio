@@ -75,9 +75,9 @@ def test_recover_finish_writes_back_and_persists():
 
 
 def test_upstream_pending_skips_completed():
-    flow = {'nodes': {'n1': {'id': 'n1', 'status': 'completed'},
-                      'n2': {'id': 'n2', 'status': 'pending'},
-                      'n3': {'id': 'n3', 'status': 'stale'}},
+    flow = {'params': {}, 'nodes': {'n1': {'id': 'n1', 'type': 'prompt', 'status': 'completed'},
+                                    'n2': {'id': 'n2', 'type': 'story', 'status': 'pending'},
+                                    'n3': {'id': 'n3', 'type': 'script', 'status': 'stale'}},
             'edges': [{'source': 'n1', 'target': 'n2'}, {'source': 'n2', 'target': 'n3'}]}
     assert df._upstream_pending(flow, 'n3') == ['n2', 'n3']
     assert df._upstream_pending(flow, 'n1') == ['n1']
@@ -121,13 +121,33 @@ def test_review_shots_fallback():
     shots = [{'shot_index': 1, 'dialogue': 'x'}]
     try:
         df.call_text_model = lambda *a, **k: '完全不是JSON'
-        assert df._review_shots(shots, 'k', 'm') == shots          # 解析失败 → 原稿
+        assert df._review_shots(shots, 'k', 'm', 'noflow') == shots          # 解析失败 → 原稿
         df.call_text_model = lambda *a, **k: '{"shots": [{"shot_index": 1}, {"shot_index": 2}]}'
-        assert len(df._review_shots(shots, 'k', 'm')) == 2          # 正常修订 → 采用
+        assert len(df._review_shots(shots, 'k', 'm', 'noflow')) == 2          # 正常修订 → 采用
         df.call_text_model = lambda *a, **k: '{"shots": [' + ','.join('{"shot_index":%d}' % i for i in range(1, 20)) + ']}'
-        assert df._review_shots(shots, 'k', 'm') == shots           # 偏差过大 → 原稿
+        assert df._review_shots(shots, 'k', 'm', 'noflow') == shots           # 偏差过大 → 原稿
     finally:
         df.call_text_model = orig
+
+
+def test_abort_check():
+    import src.services.text_model as tm
+    import requests as rq
+    flag = {'aborted': False}
+    orig_post = rq.post
+    try:
+        def fake_post(*a, **k):
+            flag['aborted'] = True
+            class R: status_code = 429; text = 'rate'; headers = {}
+            return R()
+        rq.post = fake_post
+        try:
+            tm.call_text_model('s', 'u', 'k', abort_check=lambda: flag['aborted'])
+            assert False, '应抛出已中止'
+        except RuntimeError as e:
+            assert '已中止' in str(e)
+    finally:
+        rq.post = orig_post
 
 
 if __name__ == '__main__':

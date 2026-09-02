@@ -7,7 +7,7 @@ export function FilesPage() {
 
   const load = async () => {
     try {
-      const data = await api.listFiles(tab)
+      const data = await api.listFiles(tab, 'all')
       setFiles(data.files || [])
     } catch { /* ignore */ }
   }
@@ -28,7 +28,7 @@ export function FilesPage() {
         {files.length === 0 ? (
           <p style={{ color: 'var(--text2)', textAlign: 'center', padding: 20 }}>暂无文件</p>
         ) : files.map(f => (
-          <div key={f.filename} className="task-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
+          <div key={f.url} className="task-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
             <div style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
               <div className="task-info">
                 <div className="task-prompt" style={{ fontFamily: 'monospace', fontSize: 12 }}>{f.filename}</div>

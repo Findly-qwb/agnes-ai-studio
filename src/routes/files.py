@@ -34,28 +34,39 @@ def _do_shutdown():
 
 @files_bp.route('/api/files/<subdir>', methods=['GET'])
 def list_files(subdir):
-    """列出本地已生成的文件"""
+    """列出本地已生成的文件。
+    默认只返回顶层目录（首页用）；?scope=all 时额外纳入各短剧 dramas/<id>/videos|images
+    （文件页用）。首页不传 scope，避免被大量短剧图挤出。"""
     if subdir not in ('videos', 'pictures'):
         return jsonify({'success': False, 'error': '无效目录'}), 400
 
     app_dir = get_app_dir()
-    target_dir = os.path.join(app_dir, subdir)
-    if not os.path.exists(target_dir):
-        return jsonify({'success': True, 'files': []})
-
     files = []
-    for f in sorted(os.listdir(target_dir), reverse=True):
-        filepath = os.path.join(target_dir, f)
-        if os.path.isfile(filepath):
-            stat = os.stat(filepath)
-            files.append({
-                'filename': f,
-                'url': f'/{subdir}/{f}',
-                'size': stat.st_size,
-                'size_display': _format_size(stat.st_size),
-                'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-            })
+    # (磁盘目录, URL 前缀)
+    roots = [(os.path.join(app_dir, subdir), f'/{subdir}/')]
+    if request.args.get('scope') == 'all':
+        drama_sub = 'videos' if subdir == 'videos' else 'images'
+        dramas_dir = os.path.join(app_dir, 'dramas')
+        if os.path.isdir(dramas_dir):
+            for did in sorted(os.listdir(dramas_dir), reverse=True):
+                roots.append((os.path.join(dramas_dir, did, drama_sub), f'/dramas/{did}/{drama_sub}/'))
 
+    for target_dir, url_prefix in roots:
+        if not os.path.isdir(target_dir):
+            continue
+        for f in os.listdir(target_dir):
+            filepath = os.path.join(target_dir, f)
+            if os.path.isfile(filepath):
+                stat = os.stat(filepath)
+                files.append({
+                    'filename': f,
+                    'url': url_prefix + f,
+                    'size': stat.st_size,
+                    'size_display': _format_size(stat.st_size),
+                    'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                })
+
+    files.sort(key=lambda x: x['modified'], reverse=True)
     return jsonify({'success': True, 'files': files})
 
 

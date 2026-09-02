@@ -19,9 +19,9 @@ export const api = {
     req<any>('/api/prompt/enhance', { method: 'POST', body: JSON.stringify(body) }),
 
   // Image
-  generateImage: (body: { prompt: string; model?: string; size?: string; ratio?: string; save_local?: boolean }) =>
+  generateImage: (body: { prompt: string; model?: string; size?: string; ratio?: string; save_local?: boolean; translate_prompt?: boolean }) =>
     req<any>('/api/image/generate', { method: 'POST', body: JSON.stringify(body) }),
-  img2img: (body: { prompt: string; image_url: string; size?: string; ratio?: string; model?: string }) =>
+  img2img: (body: { prompt: string; image_url: string; size?: string; ratio?: string; model?: string; translate_prompt?: boolean }) =>
     req<any>('/api/image/img2img', { method: 'POST', body: JSON.stringify(body) }),
   uploadImage: (file: File) => {
     const fd = new FormData()
@@ -65,6 +65,7 @@ export const api = {
   flowCreate: (body: any) => req<any>('/api/drama/flow/create', { method: 'POST', body: JSON.stringify(body) }),
   flowList: () => req<any>('/api/drama/flow/list'),
   flowGet: (flowId: string) => req<any>(`/api/drama/flow/${flowId}`),
+  flowEventsUrl: (flowId: string) => `${API_BASE}/api/drama/flow/${flowId}/events`,
   flowSaveGraph: (flowId: string, body: any) => req<any>(`/api/drama/flow/${flowId}/graph`, { method: 'POST', body: JSON.stringify(body) }),
   flowRun: (flowId: string, body?: any) => req<any>(`/api/drama/flow/${flowId}/run`, { method: 'POST', body: JSON.stringify(body || {}) }),
   flowRunDownstream: (flowId: string, nodeId: string) => req<any>(`/api/drama/flow/${flowId}/run-downstream`, { method: 'POST', body: JSON.stringify({ node_id: nodeId }) }),
@@ -106,7 +107,7 @@ export const api = {
   anchorStatus: (taskId?: string) => req<any>(`/api/anchor/status${taskId ? `?task_id=${taskId}` : ''}`),
 
   // Files
-  listFiles: (subdir: string) => req<any>(`/api/files/${subdir}`),
+  listFiles: (subdir: string, scope?: 'all') => req<any>(`/api/files/${subdir}${scope ? `?scope=${scope}` : ''}`),
   shutdown: () => req<any>('/api/shutdown', { method: 'POST' }),
 
   // Ollama

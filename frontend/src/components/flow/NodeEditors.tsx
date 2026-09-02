@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import { useToast } from '../../store/useToast'
 import { useModels } from '../../store/useModels'
+import { EnhanceBtn } from '../EnhanceBtn'
 
 const btn = { fontSize: 12, color: '#fff', background: 'var(--accent)', border: 'none', borderRadius: 4, padding: '4px 12px', cursor: 'pointer' } as const
 const btnSm = { ...btn, padding: '2px 8px', fontSize: 11 } as const
@@ -42,16 +43,27 @@ export function AsyncFileLabel({ children, onFile, style, ...rest }: { children:
   )
 }
 
+// 内容未产出占位：运行中不渲染空编辑器，避免误编辑后被回填覆盖
+function LoadingBox({ label }: { label: string }) {
+  return (
+    <div style={{ minHeight: 140, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text2)', fontSize: 12, border: '1px dashed var(--border)', borderRadius: 8 }}>
+      <span className="loading-spinner" style={{ width: 22, height: 22 }} />
+      {label}
+    </div>
+  )
+}
+
 // ---------- 描述节点（prompt） ----------
 export function PromptEditor({ flow, onSaved }: { flow: any, onSaved: () => void }) {
   const say = useToast().show
   const [p, setP] = useState(flow.params?.prompt || '')
   return (
     <div>
-      <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 6 }}>短剧描述（保存后需重跑故事及所有下游节点）</div>
+      <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 6 }}>短剧描述（保存后此节点及下游自动标记「需重跑」，点运行即整链重新生成）</div>
       <textarea style={{ ...ta, minHeight: 160 }} value={p} onChange={e => setP(e.target.value)} />
-      <div style={{ marginTop: 8, textAlign: 'right' }}>
-        <AsyncBtn style={btn} onClick={async () => {
+      <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        <EnhanceBtn getText={() => p} mode="story" onApply={setP} />
+        <AsyncBtn style={{ ...btn, marginLeft: 'auto' }} onClick={async () => {
           try {
             await api.flowSaveGraph(flow.flow_id, { params: { ...flow.params, prompt: p } })
             say('描述已保存', 'success')
@@ -67,11 +79,13 @@ export function PromptEditor({ flow, onSaved }: { flow: any, onSaved: () => void
 export function TextEditor({ flow, node, onSaved }: { flow: any, node: any, onSaved: () => void }) {
   const say = useToast().show
   const [text, setText] = useState(node.output?.text || '')
+  if (node.status === 'running') return <LoadingBox label="内容生成中，完成后可编辑…" />
   return (
     <div>
       <textarea style={{ ...ta, minHeight: 260, lineHeight: 1.7 }} value={text} onChange={e => setText(e.target.value)} />
-      <div style={{ marginTop: 8, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <AsyncBtn style={btn} onClick={async () => {
+      <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        <EnhanceBtn getText={() => text} mode="story" onApply={setText} />
+        <AsyncBtn style={{ ...btn, marginLeft: 'auto' }} onClick={async () => {
           try {
             await api.flowNodeEdit(flow.flow_id, node.id, { output: { text } })
             say('已保存，下游节点标记为需重跑', 'success')
@@ -87,6 +101,7 @@ export function TextEditor({ flow, node, onSaved }: { flow: any, node: any, onSa
 export function StoryboardEditor({ flow, node, onSaved }: { flow: any, node: any, onSaved: () => void }) {
   const say = useToast().show
   const [json, setJson] = useState(JSON.stringify(node.output?.shots || [], null, 1))
+  if (node.status === 'running') return <LoadingBox label="分镜生成中（含 LLM 自审修复），完成后可直接编辑 JSON…" />
   return (
     <div>
       <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 6 }}>直接编辑分镜 JSON（shot_index / scene_desc / characters / action / camera / dialogue / prompt_en）</div>
@@ -112,9 +127,16 @@ export function AssetsEditor({ flow, node, onSaved }: { flow: any, node: any, on
   const assets: any[] = node.output?.assets || []
   const running = node.status === 'running'
   const descEdits = useRef<Record<number, string>>({})
+  const descRefs = useRef<Record<number, HTMLTextAreaElement | null>>({})
 
   const imgSrc = (a: any) => a.local_file ? `/dramas/${flow.drama_id}/images/${a.local_file}` : (a.image_url || '')
   const catLabel: Record<string, string> = { characters: '角色', scenes: '场景', props: '道具' }
+
+  if (!assets.length) {
+    return running
+      ? <LoadingBox label="剧本解析 + 素材生图中：先提取角色/场景/道具清单，再逐个出三视图…" />
+      : <div style={{ fontSize: 12, color: 'var(--text2)' }}>素材未生成：点「▶ 运行此节点」开始</div>
+  }
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 10 }}>
@@ -131,8 +153,11 @@ export function AssetsEditor({ flow, node, onSaved }: { flow: any, node: any, on
               {a.name} <span style={{ color: 'var(--accent)', fontSize: 10 }}>[{catLabel[a.category] || a.category}]</span>
             </div>
             <textarea style={{ ...ta, minHeight: 60, fontSize: 11 }} defaultValue={a.desc || ''}
+              ref={el => { descRefs.current[idx] = el }}
               onChange={e => { descEdits.current[idx] = e.target.value }} />
-            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <EnhanceBtn getText={() => descEdits.current[idx] ?? a.desc ?? a.img_prompt ?? ''} mode="image"
+                onApply={t => { descEdits.current[idx] = t; if (descRefs.current[idx]) descRefs.current[idx].value = t }} />
               <AsyncBtn style={btnSm} onClick={async () => {
                 try {
                   const custom = descEdits.current[idx]
@@ -185,6 +210,7 @@ export function ShotsEditor({ flow, node, onSaved }: { flow: any, node: any, onS
     try {
       await api.flowShotRun(flow.flow_id, { shot_index: si, ...(extra || {}) })
       say(`镜头 ${si} 开始生成`, 'success')
+      setOpen(si)   // 生成即展开详情：参考图/提示词不用二次点击
       onSaved()
     } catch (e: any) { say('启动失败: ' + e.message, 'error') }
   }
@@ -198,20 +224,26 @@ export function ShotsEditor({ flow, node, onSaved }: { flow: any, node: any, onS
         const expanded = open === si
         return (
           <div key={si} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13, fontWeight: 600, cursor: 'pointer' }} onClick={() => setOpen(expanded ? null : si)}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, cursor: 'pointer', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={() => setOpen(expanded ? null : si)}>
                 镜头 {si} <span style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 400 }}>[{s.camera || ''}] {String(s.scene_desc || '').slice(0, 40)}</span>
               </span>
-              <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {r?.status === 'completed' && <span style={{ fontSize: 11, color: 'var(--success)' }}>✓ 完成</span>}
-                {r?.status === 'generating' && <span style={{ fontSize: 11, color: '#3b82f6' }}>⟳ 生成中…</span>}
-                {r?.status === 'failed' && <span style={{ fontSize: 11, color: 'var(--error)' }}>✗ {String(r.error || '').slice(0, 40)}</span>}
-                {(!r || r.status !== 'generating') && (
+                {r?.status === 'generating' && <span style={{ fontSize: 11, color: '#3b82f6', display: 'flex', alignItems: 'center', gap: 4 }}><span className="loading-spinner" style={{ width: 11, height: 11 }} /> 生成中…</span>}
+                {r?.status === 'failed' && <span style={{ fontSize: 11, color: 'var(--error)', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.error}>✗ {String(r.error || '').slice(0, 40)}</span>}
+                {!r && node.status === 'running' && <span style={{ fontSize: 11, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 4 }}><span className="loading-spinner" style={{ width: 11, height: 11 }} /> 排队中</span>}
+                {(!r || r.status !== 'generating') && node.status !== 'running' && (
                   <AsyncBtn style={btnSm} onClick={() => runShot(si)}>{r?.status === 'completed' ? '🔄 重做' : '▶ 生成'}</AsyncBtn>
                 )}
               </span>
             </div>
-            {videoSrc && <video src={videoSrc} controls style={{ width: '100%', maxWidth: 420, borderRadius: 6, marginTop: 8 }} />}
+            {videoSrc && <video src={videoSrc} controls style={{ display: 'block', margin: '8px auto 0', height: 220, maxWidth: '100%', borderRadius: 6, background: '#000' }} />}
+            {!videoSrc && r?.status === 'generating' && (
+              <div style={{ height: 160, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center', justifyContent: 'center', background: 'var(--surface2)', borderRadius: 6, marginTop: 8, color: 'var(--text2)', fontSize: 12 }}>
+                <span className="loading-spinner" /> 正在生成视频，请耐心等待…
+              </div>
+            )}
             {expanded && <ShotDetail flow={flow} shotIndex={si} say={say} onSaved={onSaved} runShot={runShot} />}
           </div>
         )
@@ -264,9 +296,12 @@ function ShotDetail({ flow, shotIndex, say, onSaved, runShot }: any) {
       </div>
       <div style={{ fontSize: 11, fontWeight: 600, margin: '8px 0 4px' }}>视频提示词（中文会自动翻译）</div>
       <textarea style={{ ...ta, minHeight: 80, fontSize: 12 }} value={prompt} onChange={e => setPrompt(e.target.value)} />
-      <AsyncBtn style={{ ...btnSm, marginTop: 6 }} onClick={() => runShot(shotIndex, prompt ? { custom_prompt: prompt } : {})}>
-        ▶ 用此提示词生成
-      </AsyncBtn>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <AsyncBtn style={{ ...btnSm, marginTop: 6 }} onClick={() => runShot(shotIndex, prompt ? { custom_prompt: prompt } : {})}>
+          ▶ 用此提示词生成
+        </AsyncBtn>
+        <EnhanceBtn getText={() => prompt} mode="video" onApply={setPrompt} />
+      </div>
     </div>
   )
 }
@@ -277,7 +312,8 @@ export function MergeEditor({ flow, node, onSaved }: { flow: any, node: any, onS
   const sh = nearestAncestor(flow, node.id, 'shots')
   const results: any[] = sh?.output?.results || []
   const done = results.filter(r => r.status === 'completed' && r.local_file)
-  const [order, setOrder] = useState<number[]>([])
+  // 默认全选按序合并（最常见意图），再手动增删/调序
+  const [order, setOrder] = useState<number[]>(() => done.map(d => d.shot_index))
   const [name, setName] = useState('')
 
   const toggle = (si: number) => setOrder(o => o.includes(si) ? o.filter(x => x !== si) : [...o, si])
@@ -291,7 +327,18 @@ export function MergeEditor({ flow, node, onSaved }: { flow: any, node: any, onS
 
   return (
     <div>
-      <div style={{ fontSize: 12, marginBottom: 8 }}>已完成的镜头：{done.map(d => `#${d.shot_index}`).join(', ') || '无'}</div>
+      {node.status === 'running' && (
+        <div style={{ background: 'var(--bg)', borderRadius: 6, padding: 12, marginBottom: 8, border: '1px dashed var(--accent)', fontSize: 13, color: 'var(--accent)', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span className="loading-spinner" /> 🎬 正在拼接完整视频，通常需要几十秒…
+        </div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, marginBottom: 8, gap: 8 }}>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>已完成的镜头：{done.map(d => `#${d.shot_index}`).join(', ') || '无'}</span>
+        <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button style={btnSm} onClick={() => setOrder(done.map(d => d.shot_index))}>全选</button>
+          <button style={btnSm} onClick={() => setOrder([])}>清空</button>
+        </span>
+      </div>
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
         {done.map(d => (
           <label key={d.shot_index} style={{
@@ -320,20 +367,23 @@ export function MergeEditor({ flow, node, onSaved }: { flow: any, node: any, onS
         <input className="form-input" placeholder="合并名称(可选)" value={name} onChange={e => setName(e.target.value)} style={{ flex: 1, fontSize: 12 }} />
         <AsyncBtn style={btn} disabled={order.length < 2} onClick={async () => {
           try {
-            await api.flowMerge(flow.flow_id, { shot_indices: order, merge_name: name.trim() || `merge_${Date.now() % 10000}` })
-            say('合并成功！', 'success')
+            const d = await api.flowMerge(flow.flow_id, { shot_indices: order, merge_name: name.trim() || `merge_${Date.now() % 10000}`, node_id: node.id })
+            say(d.pipeline_completed ? '合并成功 · 全部镜头已收口，流水线完成 ✅' : '合并成功！', 'success')
             setOrder([])
             onSaved()
           } catch (e: any) { say('合并失败: ' + e.message, 'error') }
         }}>🧩 合并</AsyncBtn>
       </div>
-      {mergedList.map((m: any, i: number) => (
-        <div key={i} style={{ marginTop: 12, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>🎬 {m.name}{m.shot_indices?.length ? `（${m.shot_indices.join(' → ')}）` : ''}</div>
-          <video src={`/dramas/${flow.drama_id}/videos/${m.merged_file}`} controls style={{ width: '100%', maxWidth: 460, borderRadius: 6 }} />
-          <a href={`/dramas/${flow.drama_id}/videos/${m.merged_file}`} download style={{ fontSize: 11, color: 'var(--accent)', display: 'inline-block', marginTop: 4 }}>⬇️ 下载</a>
-        </div>
-      ))}
+      {mergedList.map((m: any, i: number) => {
+        const pipeline = !m.shot_indices?.length
+        return (
+          <div key={i} style={{ marginTop: 12, background: pipeline ? 'linear-gradient(135deg, var(--accent) 0%, #6c5ce7 100%)' : 'var(--bg)', border: pipeline ? 'none' : '1px solid var(--border)', borderRadius: 8, padding: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: pipeline ? '#fff' : 'var(--text)' }}>🎬 {m.name}{m.shot_indices?.length ? `（${m.shot_indices.join(' → ')}）` : ''}</div>
+            <video src={`/dramas/${flow.drama_id}/videos/${m.merged_file}`} controls style={{ width: '100%', maxWidth: 460, borderRadius: 6 }} />
+            <a href={`/dramas/${flow.drama_id}/videos/${m.merged_file}`} download style={{ fontSize: 11, color: pipeline ? '#fff' : 'var(--accent)', display: 'inline-block', marginTop: 4 }}>⬇️ 下载</a>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -378,32 +428,29 @@ export function NodeParams({ flow, node, onSaved }: { flow: any, node: any, onSa
     const all: Record<string, string> = { ...models.text_models, ...models.image_models, ...models.video_models, ...STYLE_LABELS }
     return all[v] || v || '未设置'
   }
+  // 改完即存（ComfyUI widget 语义）：避免「选了模型没点保存 → 运行用旧模型」的陷阱
+  const change = (key: string, v: string) => {
+    const n = { ...p }
+    if (v) n[key] = v
+    else delete n[key]
+    setP(n)
+    api.flowNodeParams(flow.flow_id, node.id, n).then(onSaved).catch(e => say('保存失败: ' + e.message, 'error'))
+  }
   return (
     <div style={{ border: '1px dashed var(--border)', borderRadius: 8, padding: 8, marginBottom: 10 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>⚙ 节点参数（默认继承流配置，可单独覆盖）</div>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>⚙ 节点参数（改动即时自动保存 · 默认继承流配置）</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
         {fields.map(f => (
           <label key={f.key} style={{ fontSize: 11, color: 'var(--text2)' }}>
             {f.label}
             <select className="form-select" style={{ width: '100%', marginTop: 2, fontSize: 12 }}
               value={p[f.key] || ''}
-              onChange={e => setP(s => {
-                const n = { ...s }
-                if (e.target.value) n[f.key] = e.target.value
-                else delete n[f.key]
-                return n
-              })}>
+              onChange={e => change(f.key, e.target.value)}>
               <option value="">继承：{inheritName(f.key)}</option>
               {f.opts.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </label>
         ))}
-      </div>
-      <div style={{ textAlign: 'right', marginTop: 6 }}>
-        <AsyncBtn style={btnSm} onClick={async () => {
-          try { await api.flowNodeParams(flow.flow_id, node.id, p); say('节点参数已保存', 'success'); onSaved() }
-          catch (e: any) { say('保存失败: ' + e.message, 'error') }
-        }}>💾 保存节点参数</AsyncBtn>
       </div>
     </div>
   )

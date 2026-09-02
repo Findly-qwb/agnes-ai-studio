@@ -51,9 +51,53 @@ def test_reuse_only_existing_files():
         {'shot_index': 0, 'status': 'completed', 'local_file': 'a.mp4'},
         {'shot_index': 1, 'status': 'completed', 'local_file': 'missing.mp4'},
         {'shot_index': 2, 'status': 'failed'}]}}
-    reused = df._reuse_completed_shots({'flow_id': 'f', 'drama_id': drama}, node,
+    reused = df._reuse_completed_shots({'flow_id': 'f', 'drama_id': drama, 'params': {}}, node,
                                        [{'shot_index': 0}, {'shot_index': 1}, {'shot_index': 2}], drama)
     assert set(reused) == {0}
+
+
+def test_shot_reuse_fingerprint():
+    drama = 'test6'
+    vdir = os.path.join(_tmp, 'dramas', drama, 'videos')
+    os.makedirs(vdir, exist_ok=True)
+    open(os.path.join(vdir, 'a.mp4'), 'w').close()
+    params = {'shot_duration': 5}
+    flow = {'flow_id': 'f', 'drama_id': drama, 'params': params, '_shot_assets_cache': []}
+    shot = {'shot_index': 0, 'dialogue': '你好'}
+    node = {'id': 'n', 'type': 'shots', 'output': {'results': [
+        {'shot_index': 0, 'status': 'completed', 'local_file': 'a.mp4'}]}}
+    assert 0 in df._reuse_completed_shots(flow, node, [shot], drama)      # 旧数据无 fp → 信任
+    node['output']['results'][0]['fp'] = df._shot_fp(shot, params, '')
+    assert 0 in df._reuse_completed_shots(flow, node, [shot], drama)      # 指纹一致 → 复用
+    changed = dict(shot, dialogue='一' * 40)                              # 分镜台词变多 → 时长升档
+    assert 0 not in df._reuse_completed_shots(flow, node, [changed], drama)
+    flow_long = dict(flow, params={'shot_duration': 18})                  # 时长档位变化
+    assert 0 not in df._reuse_completed_shots(flow_long, node, [shot], drama)
+    # 首参考图变化（自动匹配 → 自定义）→ 指纹不同 → 不可复用
+    fp_auto = df._shot_fp(shot, params, df._match_assets(shot, [])[1])
+    fp_custom = df._shot_fp(shot, params, '/own.png')
+    assert fp_auto != fp_custom
+    ov_flow = {'flow_id': 'f', 'drama_id': drama, 'params': params, '_shot_assets_cache': [],
+               'shot_overrides': {'0': {'custom_images': [{'image_url': '/own.png'}]}}}
+    assert 0 not in df._reuse_completed_shots(ov_flow, node, [shot], drama)
+
+
+def test_prompt_edit_invalidates_chain():
+    fid = 'test7'
+    flow = {'flow_id': fid, 'drama_id': fid, 'params': {'prompt': 'old'}, 'name': 'x', 'created_at': 0,
+            'edges': [{'source': 'a', 'target': 'b'}],
+            'nodes': {'a': {'id': 'a', 'type': 'prompt', 'status': 'completed', 'output': {'prompt': 'old'}},
+                      'b': {'id': 'b', 'type': 'story', 'status': 'completed', 'output': {'text': 'x'}}}}
+    flow['nodes']['a']['sig'] = df._node_sig(flow, 'a')
+    flow['nodes']['b']['sig'] = df._node_sig(flow, 'b')
+    assert df._cache_hit(flow, 'a') and df._cache_hit(flow, 'b')   # 改描述前：全签名命中（=静默空跑的根源）
+    flow['params']['prompt'] = 'new'                               # 签名不含全局 prompt：仍命中 → 需显式失效
+    assert df._cache_hit(flow, 'a')
+    with df.flow_lock:
+        df.flows[fid] = flow
+    df._invalidate_prompt_nodes(fid)
+    assert flow['nodes']['a']['status'] == 'stale' and flow['nodes']['b']['status'] == 'stale'
+    assert df._upstream_pending(flow, 'b') == ['a', 'b']           # 直接跑下游也会先补齐 prompt
 
 
 def test_recover_finish_writes_back_and_persists():
@@ -148,6 +192,22 @@ def test_abort_check():
             assert '已中止' in str(e)
     finally:
         rq.post = orig_post
+
+
+def test_sanitize_word_boundary():
+    from src.services.text_model import sanitize_image_prompt
+    assert sanitize_image_prompt('blood-red glowing eyes, warm light') == 'red glowing eyes, warm light'
+    assert 'killer' in sanitize_image_prompt('a killer whale')          # 不再被打成 'er whale'
+    assert sanitize_image_prompt('暴力场面') == '场面'                    # 中文直接替换
+    assert 'Scene: dead' not in sanitize_image_prompt('x')               # smoke 无异常
+
+
+def test_video_prompt_scene_first():
+    from src.services.text_model import build_video_prompt
+    en, cn = build_video_prompt({'prompt_en': 'A zombie rises from the altar', 'scene_desc': '僵尸起身',
+                                 'camera': '全景 固定'}, [])
+    assert en.startswith('A zombie rises'), en[:80]
+    assert 'No text, no subtitles' in en
 
 
 if __name__ == '__main__':

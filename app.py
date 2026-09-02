@@ -53,8 +53,13 @@ def main():
     print("  按 Ctrl+C 停止服务")
     print("=" * 60)
 
-    # 自动打开浏览器
-    threading.Timer(1.5, lambda: webbrowser.open(local_url)).start()
+    # 自动打开浏览器：打包版保持原行为；开发重启时浏览器里多半已有同一 URL 的标签页，
+    # 每次再开一个太吵（macOS ControlCenter 常驻 5000，端口永远漂到 5001 刷新即可），
+    # 需要恢复自动弹出：AGNES_OPEN_BROWSER=1 venv/bin/python app.py
+    if getattr(sys, 'frozen', False) or os.environ.get('AGNES_OPEN_BROWSER') == '1':
+        threading.Timer(1.5, lambda: webbrowser.open(local_url)).start()
+    else:
+        print("  (浏览器未自动打开：已有标签页直接刷新，或 AGNES_OPEN_BROWSER=1 启动)")
 
     print("  提示: 按 Ctrl+C 可停止服务")
     print("=" * 60)

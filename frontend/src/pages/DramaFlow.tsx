@@ -1,7 +1,7 @@
 // 短剧节点流画布主页面
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ReactFlow, Background, Controls, MiniMap, addEdge,
+  ReactFlow, Background, Controls, addEdge,
   applyNodeChanges, applyEdgeChanges,
   type Connection, type Edge, type Node, type NodeChange, type EdgeChange,
 } from '@xyflow/react'
@@ -10,7 +10,8 @@ import { api } from '../api/client'
 import { useToast } from '../store/useToast'
 import { useModels } from '../store/useModels'
 import { Modal } from '../components/Modal'
-import { FlowNodeCard, STATUS_COLORS, type Chip } from '../components/flow/FlowNodeCard'
+import { EnhanceBtn } from '../components/EnhanceBtn'
+import { FlowNodeCard, type Chip, type Preview } from '../components/flow/FlowNodeCard'
 import { PromptEditor, TextEditor, StoryboardEditor, AssetsEditor, ShotsEditor, MergeEditor, NodeParams, STYLE_LABELS, AsyncBtn } from '../components/flow/NodeEditors'
 
 const NODE_TYPES = { flowNode: FlowNodeCard }
@@ -24,34 +25,35 @@ const NODE_LABELS: Record<string, string> = {
   assets: '🖼 素材', shots: '🎥 镜头视频', merge: '🧩 合并',
 }
 
-function summarize(node: any, flow: any): { summary: string, thumbs: string[] } {
+function summarize(node: any, flow: any): { summary: string, previews: Preview[], text?: string } {
   const o = node.output
-  if (!o) return { summary: '', thumbs: [] }
+  const base = { summary: '', previews: [] as Preview[] }
+  if (!o) return base
   switch (node.type) {
-    case 'prompt': return { summary: String(o.prompt || ''), thumbs: [] }
-    case 'story': case 'script': return { summary: String(o.text || '').slice(0, 80) + '…', thumbs: [] }
+    case 'prompt': return { ...base, text: String(o.prompt || '') }
+    case 'story': case 'script': return { ...base, text: String(o.text || '') }
     case 'storyboard': {
       const warn = (o.warnings || []).length
-      return { summary: `共 ${(o.shots || []).length} 个镜头${warn ? ` · 台词升档 ${warn} 处` : ''}`, thumbs: [] }
+      return { ...base, summary: `共 ${(o.shots || []).length} 个镜头${warn ? ` · 台词升档 ${warn} 处` : ''}` }
     }
     case 'assets': {
       const assets = o.assets || []
       const rw = (o.ref_warnings || []).length
       return {
         summary: `${assets.filter((a: any) => a.image_url).length}/${assets.length} 个素材` + (o.progress ? `（${o.progress}）` : '') + (rw ? ` · ⚠${rw} 未匹配` : ''),
-        thumbs: assets.filter((a: any) => a.local_file).map((a: any) => `/dramas/${flow.drama_id}/images/${a.local_file}`),
+        previews: assets.filter((a: any) => a.local_file).slice(0, 6).map((a: any) => ({ type: 'img' as const, src: `/dramas/${flow.drama_id}/images/${a.local_file}` })),
       }
     }
     case 'shots': {
       const rs = o.results || []
-      const done = rs.filter((r: any) => r.status === 'completed')
+      const done = rs.filter((r: any) => r.status === 'completed' && r.local_file)
       return {
         summary: `完成 ${done.length}/${rs.length}`,
-        thumbs: done.slice(0, 2).map((r: any) => r.local_file ? `/dramas/${flow.drama_id}/videos/${r.local_file}` : '').filter(Boolean),
+        previews: done.slice(0, 4).map((r: any) => ({ type: 'video' as const, src: `/dramas/${flow.drama_id}/videos/${r.local_file}` })),
       }
     }
-    case 'merge': return { summary: o.merged_file || '', thumbs: [] }
-    default: return { summary: '', thumbs: [] }
+    case 'merge': return { ...base, summary: o.merged_file || '', previews: o.merged_file ? [{ type: 'video' as const, src: `/dramas/${flow.drama_id}/videos/${o.merged_file}` }] : [] }
+    default: return base
   }
 }
 
@@ -64,7 +66,7 @@ function nodeChips(n: any, flow: any, models: any): Chip[] {
   const dur: [string, string][] = [['5', '5秒'], ['10', '10秒'], ['18', '18秒']]
   const worker: [string, string][] = [['1', '×1'], ['2', '×2'], ['3', '×3'], ['4', '×4']]
   const chip = (key: string, label: string, options: [string, string][]): Chip =>
-    ({ key, label, options, value: String(p[key] ?? '') })
+    ({ key, label, options, value: String(p[key] ?? ''), inherited: String((flow.params || {})[key] ?? '') })
   switch (n.type) {
     case 'story': case 'script': return [chip('text_model', '文', tm)]
     case 'storyboard': return [chip('text_model', '文', tm), chip('shot_duration', '时长', dur)]
@@ -74,15 +76,15 @@ function nodeChips(n: any, flow: any, models: any): Chip[] {
   }
 }
 
-function toRfNodes(flow: any, models: any, onChipSaved: () => void): Node[] {
+function toRfNodes(flow: any, models: any, cb: Record<string, any>): Node[] {
   return Object.values(flow.nodes || {}).map((n: any) => {
-    const { summary, thumbs } = summarize(n, flow)
+    const { summary, previews, text } = summarize(n, flow)
     return {
       id: n.id, type: 'flowNode', position: n.pos || { x: 0, y: 0 },
       data: {
         nodeType: n.type, label: NODE_LABELS[n.type] || n.type, status: n.status, error: n.error || '',
-        summary, thumbs, chips: nodeChips(n, flow, models), flowId: flow.flow_id,
-        nodeParams: n.params || {}, onChipSaved,
+        summary, previews, text, editable: ['prompt', 'story', 'script'].includes(n.type),
+        chips: nodeChips(n, flow, models), flowId: flow.flow_id, nodeParams: n.params || {}, ...cb,
       },
     }
   })
@@ -102,8 +104,8 @@ const defaultLayout = (types: string[]) => {
   types.forEach((t, i) => {
     const id = `n${i + 1}`
     nodes.push({
-      id, type: 'flowNode', position: { x: 60 + i * 280, y: TYPE_ORDER[t] === 4 || TYPE_ORDER[t] === 5 ? 320 : 80 },
-      data: { nodeType: t, label: NODE_LABELS[t], status: 'pending', error: '', summary: '', thumbs: [] },
+      id, type: 'flowNode', position: { x: 60 + i * 420, y: TYPE_ORDER[t] === 4 || TYPE_ORDER[t] === 5 ? 360 : 80 },
+      data: { nodeType: t, label: NODE_LABELS[t], status: 'pending', error: '', summary: '', previews: [] },
     })
     if (prev) edges.push({ id: `e${prev}-${id}`, source: prev, target: id, type: 'smoothstep' })
     prev = id
@@ -115,7 +117,7 @@ const defaultLayout = (types: string[]) => {
 const tidyPositions = (ns: Node[]): Node[] => ns.map(n => {
   const t = (n.data as any).nodeType
   const order = TYPE_ORDER[t] ?? 99
-  return { ...n, position: { x: 60 + order * 280, y: t === 'assets' || t === 'shots' ? 320 : 80 } }
+  return { ...n, position: { x: 60 + order * 420, y: t === 'assets' || t === 'shots' ? 360 : 80 } }
 })
 
 export function DramaFlowPage() {
@@ -138,7 +140,17 @@ export function DramaFlowPage() {
   const [templates, setTemplates] = useState<any[]>([])
   const [selNodeId, setSelNodeId] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [zoom, setZoom] = useState<Preview | null>(null)
+  const flowRef = useRef<any>(null)
+  flowRef.current = flow
+  // 节点卡片的稳定回调代理：卡片只持有 proxy，调用时永远读最新闭包（轮询不重建 data 也不失效）
+  const hRef = useRef<Record<string, any>>({})
+  const nodeCbs = useMemo(() => {
+    const o: Record<string, any> = {}
+    for (const k of ['onChanged', 'onRun', 'onRunDown', 'onDelete', 'onOpen', 'onZoom', 'onSaveText'])
+      o[k] = (...a: any[]) => hRef.current[k]?.(...a)
+    return o
+  }, [])
 
   useEffect(() => {
     if (models?.defaults) {
@@ -159,37 +171,38 @@ export function DramaFlowPage() {
     try {
       const d = await api.flowGet(fid)
       setFlow(d.flow)
-      setNodes(toRfNodes(d.flow, models, () => openFlow(fid)))
+      setNodes(toRfNodes(d.flow, models, nodeCbs))
       setEdges(toRfEdges(d.flow))
       localStorage.setItem('currentFlowId', fid)
     } catch { localStorage.removeItem('currentFlowId') }
-  }, [models])
+  }, [models, nodeCbs])
   useEffect(() => {
     const saved = localStorage.getItem('currentFlowId')
     if (saved) openFlow(saved)
     else { const l = defaultLayout(['prompt', 'story', 'script', 'storyboard', 'assets', 'shots', 'merge']); setNodes(l.nodes); setEdges(l.edges) }
   }, [openFlow])
 
+  // 运行中状态推送：服务端每次状态落盘即时推一帧（替代原 5 秒轮询，零延迟零空转）
+  const busy = !!flow && (Object.values(flow.nodes || {}) as any[]).some(n =>
+    n.status === 'running' ||
+    (n.type === 'shots' && (n.output?.results || []).some((r: any) => r.status === 'generating')))
+  const applyFlow = useCallback((f: any) => {
+    setFlow(f)
+    const running = new Set(Object.values(f.nodes || {}).filter((n: any) => n.status === 'running').map((n: any) => n.id))
+    setEdges(es => es.map(e => ({ ...e, animated: running.has(e.source) })))
+    setNodes(ns => ns.map(n => {
+      const fn = f.nodes[n.id]
+      if (!fn) return n
+      const { summary, previews, text } = summarize(fn, f)
+      return { ...n, data: { ...n.data, status: fn.status, error: fn.error || '', summary, previews, text, chips: nodeChips(fn, f, models), nodeParams: fn.params || {} } }
+    }))
+  }, [models])
   useEffect(() => {
-    if (!flow) return
-    const busy = Object.values(flow.nodes || {}).some((n: any) => n.status === 'running') ||
-      Object.values(flow.nodes || {}).some((n: any) => n.type === 'shots' && (n.output?.results || []).some((r: any) => r.status === 'generating'))
-    if (!busy) { if (pollRef.current) clearInterval(pollRef.current); return }
-    pollRef.current = setInterval(() => {
-      api.flowGet(flow.flow_id).then(d => {
-        setFlow(d.flow)
-        const running = new Set(Object.values(d.flow.nodes || {}).filter((n: any) => n.status === 'running').map((n: any) => n.id))
-        setEdges(es => es.map(e => ({ ...e, animated: running.has(e.source) })))
-        setNodes(ns => ns.map(n => {
-          const fn = d.flow.nodes[n.id]
-          if (!fn) return n
-          const { summary, thumbs } = summarize(fn, d.flow)
-          return { ...n, data: { ...n.data, status: fn.status, error: fn.error || '', summary, thumbs, chips: nodeChips(fn, d.flow, models) } }
-        }))
-      }).catch(() => { })
-    }, 5000)
-    return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [flow?.flow_id, flow?.nodes && JSON.stringify(Object.values(flow.nodes).map((n: any) => n.status))])
+    if (!flow || !busy) return
+    const es = new EventSource(api.flowEventsUrl(flow.flow_id))
+    es.onmessage = (ev) => { try { applyFlow(JSON.parse(ev.data)) } catch { } }
+    return () => es.close()
+  }, [flow?.flow_id, busy, applyFlow])
 
   const onNodesChange = useCallback((ch: NodeChange[]) => setNodes(ns => applyNodeChanges(ch, ns)), [])
   const onEdgesChange = useCallback((ch: EdgeChange[]) => setEdges(es => applyEdgeChanges(ch, es)), [])
@@ -241,8 +254,8 @@ export function DramaFlowPage() {
 
   const runAll = async () => {
     try {
-      await api.flowRun(flow.flow_id)
-      toast.show('开始运行未完成的节点', 'info')
+      const d = await api.flowRun(flow.flow_id)
+      toast.show(d.queued?.length ? `已排队 ${d.queued.length} 个节点开始运行` : '无节点需要运行：所有输入签名未变化', 'info')
       setTimeout(() => openFlow(flow.flow_id), 800)
     } catch (e: any) { toast.show(e.message, 'error') }
   }
@@ -270,10 +283,11 @@ export function DramaFlowPage() {
     setTimeout(() => openFlow(flow.flow_id), 1500)
   }
 
-  // ComfyUI 式快捷键：Ctrl/⌘+Enter 运行未完成节点
+  // ComfyUI 式快捷键：Ctrl/⌘+Enter 运行未完成节点；Esc 关灯箱
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && flow) { e.preventDefault(); runAll() }
+      if (e.key === 'Escape') setZoom(null)
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
@@ -305,20 +319,56 @@ export function DramaFlowPage() {
     const id = `n${Date.now() % 100000}`
     setNodes(ns => [...ns, {
       id, type: 'flowNode', position: { x: 120 + Math.random() * 200, y: 80 + Math.random() * 200 },
-      data: { nodeType: t, label: NODE_LABELS[t], status: 'pending', error: '', summary: '', thumbs: [] },
+      data: { nodeType: t, label: NODE_LABELS[t], status: 'pending', error: '', summary: '', previews: [], ...nodeCbs },
     }])
     toast.show('已添加节点，自动保存到后端', 'info')
   }
-  const onNodeClick = useCallback(async (_: any, n: Node) => {
-    if (!flow) { toast.show('这只是预览图：先点右上「＋ 新建流」，之后即可点节点编辑', 'info'); return }
-    setSelNodeId(n.id); setDrawerOpen(true)
+  const onNodeClick = useCallback(() => {
+    if (!flowRef.current) toast.show('这只是预览图：先点右上「＋ 新建流」，之后即可拖拽、连线、编辑', 'info')
+  }, [toast])
+  const openDrawer = useCallback(async (nid: string) => {
+    const f = flowRef.current
+    if (!f) { toast.show('这只是预览图：先点右上「＋ 新建流」', 'info'); return }
+    setSelNodeId(nid); setDrawerOpen(true)
     // 新增节点还没进后端 flow（防抖同步中），先立即同步再拉取，否则编辑面板查不到节点
-    if (!flow.nodes?.[n.id]) { await syncGraph(); openFlow(flow.flow_id) }
-  }, [flow, syncGraph, openFlow, toast])
+    if (!f.nodes?.[nid]) { await syncGraph(); openFlow(f.flow_id) }
+  }, [syncGraph, openFlow, toast])
+
+  const deleteNode = (nid?: string) => {
+    const id = nid || selNodeId
+    if (!id || !confirm('删除该节点及其产出？关联连线会一并移除')) return
+    setNodes(ns => ns.filter(n => n.id !== id))
+    setEdges(es => es.filter(e => e.source !== id && e.target !== id))
+    if (selNodeId === id) { setSelNodeId(null); setDrawerOpen(false) }
+    toast.show('节点已删除，稍后自动同步到后端', 'info')  // 防抖 scheduleSync 落盘
+  }
+
+  const saveNodeText = async (nid: string, text: string) => {
+    const f = flowRef.current
+    if (!f) return
+    try {
+      if (f.nodes[nid]?.type === 'prompt') await api.flowSaveGraph(f.flow_id, { params: { ...f.params, prompt: text } })
+      else await api.flowNodeEdit(f.flow_id, nid, { output: { text } })
+      toast.show('已保存 · 下游已标记需重跑', 'success')
+    } catch (e: any) { toast.show('保存失败: ' + e.message, 'error') }
+  }
+
+  // 把最新实现挂到稳定代理上（每次渲染更新，卡片里的回调永不失效）
+  hRef.current = {
+    onChanged: () => { const f = flowRef.current; if (f) openFlow(f.flow_id) },
+    onRun: runNode, onRunDown: runDownstream, onDelete: deleteNode, onOpen: openDrawer,
+    onZoom: setZoom, onSaveText: saveNodeText,
+  }
 
   const selNode = useMemo(() => selNodeId && flow ? (flow.nodes?.[selNodeId] || null) : null, [selNodeId, flow])
 
   const sel = { padding: '6px 10px', fontSize: 12 }
+  // 全局进度条（复刻旧短剧页流水线进度体验）
+  const ns: any[] = flow ? Object.values(flow.nodes || {}) : []
+  const done = ns.filter(n => n.status === 'completed').length
+  const anyFailed = ns.some(n => n.status === 'failed')
+  const runLabels = ns.filter(n => n.status === 'running').map(n => NODE_LABELS[n.type] || n.type)
+  const pct = ns.length ? Math.round(done / ns.length * 100) : 0
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
       {/* 顶部工具栏 */}
@@ -344,8 +394,19 @@ export function DramaFlowPage() {
             <option value="">＋ 添加节点…</option>
             {['story', 'script', 'storyboard', 'assets', 'shots', 'merge'].map(t => <option key={t} value={t}>{NODE_LABELS[t]}</option>)}
           </select>
-          <span style={{ fontSize: 11, color: 'var(--text2)' }}>拖动节点摆位 · 侧边圆点拉线连接 · 选中按 Delete 移除 · 点节点开右侧编辑面板 · 运行只跑未完成/需重跑的节点</span>
+          <span style={{ fontSize: 11, color: 'var(--text2)' }}>拖动节点摆位 · 侧边圆点拉线 · 单击选中→头顶浮动操作条（▶运行/⏩下游/删除） · 双击开右侧详情面板 · 文本节点双击可就地编辑</span>
         </div>
+        {flow && ns.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ background: 'var(--border)', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+              <div style={{ width: `${pct}%`, height: '100%', background: anyFailed ? 'var(--error)' : done === ns.length ? 'var(--success)' : 'var(--accent)', transition: 'width .5s' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 11, color: 'var(--text2)' }}>
+              <span>{runLabels.length ? <><span className="loading-spinner" style={{ width: 11, height: 11, marginRight: 5, verticalAlign: '-1px' }} />正在生成：{runLabels.join('、')}…</> : anyFailed ? '有节点失败，点开查看原因' : done === ns.length ? '✅ 全部节点完成' : '点节点打开编辑 · Ctrl/⌘+Enter 运行'}</span>
+              <span>{done}/{ns.length} 完成</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 画布 + 抽屉 */}
@@ -354,7 +415,7 @@ export function DramaFlowPage() {
           <ReactFlow
             nodes={nodes} edges={edges}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
-            onNodeClick={onNodeClick}
+            onNodeClick={onNodeClick} onNodeDoubleClick={(_, n) => openDrawer(n.id)}
             nodeTypes={NODE_TYPES}
             defaultEdgeOptions={{ type: 'smoothstep' }}
             fitView deleteKeyCode={['Backspace', 'Delete']}
@@ -363,7 +424,6 @@ export function DramaFlowPage() {
           >
             <Background gap={16} size={1} color="var(--border)" />
             <Controls />
-            <MiniMap pannable zoomable nodeColor={(n) => STATUS_COLORS[(n.data as any)?.status] || '#c3c8d9'} maskColor="rgba(16,24,40,.06)" style={{ background: 'var(--bg)' }} />
           </ReactFlow>
           {!flow && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text2)', fontSize: 14, pointerEvents: 'none' }}>
             流程预览（不可编辑）· 点右上角「＋ 新建流」后即可拖拽、连线、点节点编辑
@@ -371,12 +431,13 @@ export function DramaFlowPage() {
         </div>
 
         {drawerOpen && selNode && flow && (
-          <div style={{ width: 460, flexShrink: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 12, overflowY: 'auto' }}>
+          <div style={{ width: 520, flexShrink: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 12, overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
               <b>{NODE_LABELS[selNode.type] || selNode.type} · 节点详情</b>
               <div style={{ display: 'flex', gap: 6 }}>
                 <AsyncBtn style={{ ...sel, border: '1px solid var(--border)', background: 'var(--bg)', borderRadius: 4, color: 'var(--text)' }} onClick={() => runNode(selNode.id)}>▶ 运行此节点</AsyncBtn>
                 <AsyncBtn style={{ ...sel, border: '1px solid var(--border)', background: 'var(--bg)', borderRadius: 4, color: 'var(--text)' }} onClick={() => runDownstream(selNode.id)}>▶ 运行下游</AsyncBtn>
+                <button className="btn" style={{ ...sel, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--error)' }} onClick={() => deleteNode()}>🗑 删除</button>
                 <button style={{ ...sel, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text2)' }} onClick={() => setDrawerOpen(false)}>✕</button>
               </div>
             </div>
@@ -399,6 +460,15 @@ export function DramaFlowPage() {
         )}
       </div>
 
+      {/* 图片/视频灯箱：点空白或 Esc 关闭 */}
+      {zoom && (
+        <div className="lightbox" onClick={() => setZoom(null)}>
+          {zoom.type === 'img'
+            ? <img src={zoom.src} alt="" onClick={e => e.stopPropagation()} />
+            : <video src={zoom.src} controls autoPlay onClick={e => e.stopPropagation()} />}
+        </div>
+      )}
+
       {/* 新建流弹窗 */}
       <Modal show={createOpen} title="＋ 新建短剧流" onClose={() => setCreateOpen(false)}
         actions={<>
@@ -407,7 +477,7 @@ export function DramaFlowPage() {
         </>}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div>
-            <label className="form-label">短剧描述</label>
+            <label className="form-label">短剧描述 <EnhanceBtn getText={() => prompt} mode="story" onApply={setPrompt} /></label>
             <textarea className="form-input" rows={3} placeholder="一只流浪猫深夜在旧公寓里学跳街舞…" value={prompt} onChange={e => setPrompt(e.target.value)} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>

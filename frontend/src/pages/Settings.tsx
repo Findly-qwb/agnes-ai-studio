@@ -36,7 +36,9 @@ export function Settings({ show, onClose }: SettingsProps) {
       if (d.minimax_api_key_masked) setMinimaxKey('')
       if (d.prompt_enhance_model) setEnhanceModel(d.prompt_enhance_model)
     }).catch(() => { })
-    api.anchorModels().then(d => {
+    // /api/drama/models 才是合并了自定义模型（且过滤掉无 Key）的全量文本模型；
+    // anchorModels 只有内置选项，用它会导致自定义模型不显示
+    api.dramaModels().then(d => {
       if (d.success) setTextModelOptions(d.text_models || {})
     }).catch(() => { })
     api.ollamaConfig().then(d => {

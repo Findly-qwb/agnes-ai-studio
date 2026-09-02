@@ -15,6 +15,7 @@ export interface PromptConfig {
   videoSeconds: number
   fps: number
   imageUrl?: string
+  translatePrompt?: boolean
 }
 
 const placeholders: Record<PromptMode, string> = {
@@ -58,6 +59,7 @@ export function PromptInput({ busy, onSubmit }: Props) {
   const [attach, setAttach] = useState<{ preview: string; url: string } | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [enhancing, setEnhancing] = useState(false)
+  const [translateOn, setTranslateOn] = useState(true)
   const [enhanced, setEnhanced] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -109,6 +111,7 @@ export function PromptInput({ busy, onSubmit }: Props) {
       size: mode === 'video' || tiered ? size : legacySize,
       ratio: mode !== 'video' && tiered ? ratio : undefined,
       videoRatio, videoSeconds, fps, imageUrl: attach?.url,
+      translatePrompt: translateOn,
     })
   }
 
@@ -117,7 +120,7 @@ export function PromptInput({ busy, onSubmit }: Props) {
       onDragOver={e => { e.preventDefault(); setDragOver(true) }}
       onDragLeave={() => setDragOver(false)}
       onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) uploadFile(f) }}>
-<div className="composer-top">
+      <div className="composer-top">
         <button className={`attach-btn ${needsImage && !attach ? 'required' : ''}`} onClick={() => fileRef.current?.click()}>
           ＋ 参考图{needsImage ? '（必选）' : '（可选）'}
         </button>
@@ -147,52 +150,62 @@ export function PromptInput({ busy, onSubmit }: Props) {
       )}
 
       <div className="composer-footer">
-        <select className="composer-size" value={mode} onChange={e => { setMode(e.target.value as PromptMode); if (e.target.value === 'image') setAttach(null) }}>
-          <option value="image">🖼 图片生成</option>
-          <option value="img2img">🎨 图生图</option>
-          <option value="video">🎬 视频生成</option>
-        </select>
-        <select className="composer-size" value={model || modelDefault} onChange={e => mode === 'video' ? setVideoModel(e.target.value) : setImageModel(e.target.value)}>
-          {Object.entries(modelOptions || {}).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-        </select>
+        <div className="composer-footer-left">
+          <select className="composer-size" value={mode} onChange={e => { setMode(e.target.value as PromptMode); if (e.target.value === 'image') setAttach(null) }}>
+            <option value="image">🖼 图片生成</option>
+            <option value="img2img">🎨 图生图</option>
+            <option value="video">🎬 视频生成</option>
+          </select>
+          <select className="composer-size" value={model || modelDefault} onChange={e => mode === 'video' ? setVideoModel(e.target.value) : setImageModel(e.target.value)}>
+            {Object.entries(modelOptions || {}).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </select>
         {mode !== 'video' ? (
-          TIERED_IMAGE_MODELS.has(model || modelDefault) ? (
-            <>
-              <select className="composer-size" value={size} onChange={e => setSize(e.target.value)} title="分辨率档位">
-                {TIER_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+          <>
+          {TIERED_IMAGE_MODELS.has(model || modelDefault) ? (
+              <>
+                <select className="composer-size" value={size} onChange={e => setSize(e.target.value)} title="分辨率档位">
+                  {TIER_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select className="composer-size" value={ratio} onChange={e => setRatio(e.target.value)} title="宽高比">
+                  {IMAGE_RATIOS.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </>
+            ) : (
+              <select className="composer-size" value={legacySize} onChange={e => setLegacySize(e.target.value)} title="输出尺寸">
+                <option value="1024x1024">1:1 · 1024x1024</option>
+                <option value="1024x768">4:3 · 1024x768</option>
+                <option value="768x1024">3:4 · 768x1024</option>
+                <option value="1536x1024">16:9 · 1536x1024</option>
+                <option value="1024x1536">9:16 · 1024x1536</option>
               </select>
-              <select className="composer-size" value={ratio} onChange={e => setRatio(e.target.value)} title="宽高比">
-                {IMAGE_RATIOS.map(r => <option key={r} value={r}>{r}</option>)}
+            )}
+            <button type="button" className={`composer-size translate-toggle${translateOn ? ' on' : ''}`}
+              onClick={() => setTranslateOn(v => !v)}
+              title="中文描述自动翻译成英文后再生成（Agnes 图像模型对英文的理解更准）">
+              🌐→EN
+            </button>
+          </>
+          ) : (
+            <>
+              <select className="composer-size" value={videoRatio} onChange={e => setVideoRatio(e.target.value)}>
+                {Object.keys(VIDEO_RATIOS).map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <select className="composer-size" value={videoSeconds} onChange={e => setVideoSeconds(+e.target.value)}>
+                {[3, 5, 10].map(s => <option key={s} value={s}>{s}s</option>)}
+              </select>
+              <select className="composer-size" value={fps} onChange={e => setFps(+e.target.value)}>
+                {[16, 24, 30].map(f => <option key={f} value={f}>{f}fps</option>)}
               </select>
             </>
-          ) : (
-            <select className="composer-size" value={legacySize} onChange={e => setLegacySize(e.target.value)} title="输出尺寸">
-              <option value="1024x1024">1:1 · 1024x1024</option>
-              <option value="1024x768">4:3 · 1024x768</option>
-              <option value="768x1024">3:4 · 768x1024</option>
-              <option value="1536x1024">16:9 · 1536x1024</option>
-              <option value="1024x1536">9:16 · 1024x1536</option>
-            </select>
-          )
-        ) : (
-          <>
-            <select className="composer-size" value={videoRatio} onChange={e => setVideoRatio(e.target.value)}>
-              {Object.keys(VIDEO_RATIOS).map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-            <select className="composer-size" value={videoSeconds} onChange={e => setVideoSeconds(+e.target.value)}>
-              {[3, 5, 10].map(s => <option key={s} value={s}>{s}s</option>)}
-            </select>
-            <select className="composer-size" value={fps} onChange={e => setFps(+e.target.value)}>
-              {[16, 24, 30].map(f => <option key={f} value={f}>{f}fps</option>)}
-            </select>
-          </>
-        )}
-        <button className="wand-btn" onClick={enhance} disabled={enhancing} title="提示词优化">
-          {enhancing ? <span className="loading-spinner" /> : '🪄'}
-        </button>
-        <button className="send-btn" onClick={submit} disabled={busy} style={{ marginLeft: 0 }}>
-          {busy ? <span className="loading-spinner" /> : '↑'}
-        </button>
+          )}
+        </div>
+        <div className="composer-footer-right">
+          <button className="wand-btn" onClick={enhance} disabled={enhancing} title="提示词优化">
+            {enhancing ? <span className="loading-spinner" /> : '🪄'}
+          </button>
+          <button className="send-btn" onClick={submit} disabled={busy}>
+            {busy ? <span className="loading-spinner" /> : '↑'}
+          </button></div>
         <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
           if (e.target.files?.[0]) uploadFile(e.target.files[0])
           e.target.value = ''

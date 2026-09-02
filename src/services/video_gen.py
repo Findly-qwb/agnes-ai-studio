@@ -10,7 +10,7 @@ import uuid
 import requests
 from datetime import datetime
 
-from ..config import get_app_dir, get_vendor_base_url, BASE_URL, shutdown_event
+from ..config import get_app_dir, get_vendor_api_key, get_vendor_base_url, BASE_URL, shutdown_event
 from ..models import video_tasks, task_lock
 
 # Agnes Video 2.5 及后续版本使用 OpenAI Videos 兼容新 API（mode/seconds/size），
@@ -298,7 +298,9 @@ def run_video_job(video_model, prompt, primary_image='', extra_images=None, num_
             resp = requests.post(f'{base_url}/videos', headers=headers, json=payload, timeout=120)
         except requests.exceptions.RequestException as e:
             if attempt < 3:
-                time.sleep(30 * (attempt + 1))
+                wait = 30 * (attempt + 1)
+                print(f"[视频任务] {prefix} 提交异常({type(e).__name__})，{wait}s 后重试 ({attempt+1}/4)")
+                time.sleep(wait)
                 continue
             return {'ok': False, 'local_file': None, 'video_url': '', 'error': f'提交失败({type(e).__name__}): {str(e)[:200]}'}
         if resp.status_code == 200:
@@ -311,12 +313,15 @@ def run_video_job(video_model, prompt, primary_image='', extra_images=None, num_
             use_negative = False
             continue
         elif resp.status_code in (429, 503, 433) and attempt < 3:
-            time.sleep(30 * (attempt + 1))
+            wait = 30 * (attempt + 1)
+            print(f"[视频任务] {prefix} 队列满/限流({resp.status_code})，等待 {wait}s 重试 ({attempt+1}/4)")
+            time.sleep(wait)
             continue
         else:
             return {'ok': False, 'local_file': None, 'video_url': '', 'error': f'API {resp.status_code}: {resp.text[:300]}'}
     if not vtask_id:
         return {'ok': False, 'local_file': None, 'video_url': '', 'error': '视频任务提交失败'}
+    print(f"[视频任务] {prefix} 已提交 task_id={vtask_id}")
     if on_submit:
         try:
             on_submit({'task_id': vtask_id, 'video_id': v_video_id})

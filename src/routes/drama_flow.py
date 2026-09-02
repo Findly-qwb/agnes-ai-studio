@@ -14,30 +14,37 @@ import uuid
 import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 
 from ..config import get_api_key, get_app_dir, get_vendor_api_key, get_vendor_base_url, shutdown_event
 from ..models import ensure_drama_dirs, DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL
 from ..services.text_model import (
-    call_text_model, parse_json_from_text,
-    story_system_prompt, script_system_prompt, storyboard_system_prompt, assets_system_prompt,
-    review_system_prompt,
-    build_video_prompt, sanitize_image_prompt, translate_cn_to_en, is_mostly_chinese,
+    call_text_model, parse_json_from_text, review_system_prompt,
+    gen_story, gen_script, gen_shotlist_text, gen_asset_list,
+    build_video_prompt, translate_cn_to_en, is_mostly_chinese,
 )
-from ..services.gemini_image import is_gemini_image, generate_gemini_image
-from ..services.video_gen import (download_and_save_file, run_video_job, query_video_task,
+from ..services.video_gen import (run_video_job, query_video_task,
                                   download_generated_video, extract_video_url)
 from ..services.video_merge import merge_videos, burn_chinese_subtitle
-from .drama import build_character_image_prompt, get_style_base, DEFAULT_CHARACTER_STYLE
+# 素材生成/匹配与旧一键流水线共用 services.asset_gen 唯一实现（以前两边各抄一份）
+from ..services.asset_gen import (
+    DEFAULT_CHARACTER_STYLE, build_asset_image_prompt, request_asset_image,
+    match_shot_assets as _match_assets,
+)
 
 flow_bp = Blueprint('drama_flow', __name__)
 
 # ---------- 存储 ----------
 
+# ponytail: 单进程上限。flows 内存 dict + 全局锁 + 守护线程，隐含跑在单 worker 的
+# dev server 上；若将来要 gunicorn 多进程/多人用，把整个 JSON+锁层换成 SQLite，
+# 不要加分布式锁。
 flows = {}                       # flow_id -> flow dict
 flow_lock = threading.Lock()
 flow_stop_events = {}            # flow_id -> threading.Event
 flow_running = set()             # flow_id 正在执行整图/下游任务（防重复点击启动并发线程互相覆盖节点状态）
+flow_cv = threading.Condition()  # flow_version 变更信号，SSE 推流靠它替代前端轮询
+flow_version = {}                # flow_id -> 落盘/变更次数
 # 镜头级 override 与云端在途任务存于 flow['shot_overrides'] / flow['inflight']，
 # 随 flow JSON 原子落盘，重启由 recover_inflight_shots 回收
 
@@ -71,6 +78,13 @@ def _templates_dir():
     return d
 
 
+def _bump(flow_id):
+    """通知 SSE：该 flow 有字段变化（不写盘的内存更新也要 bump）"""
+    with flow_cv:
+        flow_version[flow_id] = flow_version.get(flow_id, 0) + 1
+        flow_cv.notify_all()
+
+
 def _persist(flow_id):
     """落盘（调用方需持有或不需要锁，写文件本身原子替换）"""
     with flow_lock:
@@ -83,6 +97,13 @@ def _persist(flow_id):
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(snapshot)
     os.replace(tmp, path)
+    _bump(flow_id)
+
+
+def _public_flow(flow):
+    """剔除内部缓存字段（_ 开头）后的可发布快照"""
+    with flow_lock:
+        return {k: v for k, v in flow.items() if not k.startswith('_')}
 
 
 def _load_flow(flow_id):
@@ -121,7 +142,7 @@ def default_graph():
         nid = f'n{i+1}'
         nodes[nid] = {'id': nid, 'type': t, 'status': 'pending', 'output': None,
                       'error': '', 'updated_at': 0,
-                      'pos': {'x': 60 + i * 300, 'y': 120 if t not in ('assets', 'shots') else 340}}
+                      'pos': {'x': 60 + i * 420, 'y': 120 if t not in ('assets', 'shots') else 360}}
         if prev:
             edges.append({'id': f'e{prev}-{nid}', 'source': prev, 'target': nid})
         prev = nid
@@ -208,6 +229,22 @@ def _mark_stale(flow_id, node_id):
             if n and n['status'] in ('completed', 'partial'):
                 n['status'] = 'stale'
     _persist(flow_id)
+
+
+def _invalidate_prompt_nodes(flow_id):
+    """描述是 prompt 节点唯一的真实输入，而节点签名不含全局 params（有意为之，
+    避免换模型等全局改动误重跑整图）。因此 params.prompt 变化必须由写入方显式失效：
+    否则全图 completed+sig 命中，「运行未完成节点」静默空转、什么都不发生"""
+    with flow_lock:
+        flow = flows.get(flow_id)
+        if not flow:
+            return
+        ids = [i for i, n in flow['nodes'].items() if n['type'] == 'prompt']
+        for i in ids:
+            flow['nodes'][i]['status'] = 'stale'
+    _persist(flow_id)
+    for i in ids:
+        _mark_stale(flow_id, i)
 
 
 # ---------- 节点执行器 ----------
@@ -324,9 +361,7 @@ def _run_story_node(flow, node):
     api_key = _resolve_api_key(flow)
     text_model = _node_params(flow, node).get('text_model', DEFAULT_TEXT_MODEL)
     key = get_vendor_api_key(text_model, fallback_key=api_key)
-    text = call_text_model(story_system_prompt(),
-                           f"请根据以下描述，创作一个 300～500 字的短剧故事：\n{src}",
-                           key, model=text_model, abort_check=lambda: _aborted(flow['flow_id']))
+    text = gen_story(src, key, model=text_model, abort_check=lambda: _aborted(flow['flow_id']))
     return {'text': text}
 
 
@@ -336,9 +371,7 @@ def _run_script_node(flow, node):
     api_key = _resolve_api_key(flow)
     text_model = _node_params(flow, node).get('text_model', DEFAULT_TEXT_MODEL)
     key = get_vendor_api_key(text_model, fallback_key=api_key)
-    text = call_text_model(script_system_prompt(),
-                           f"请将以下故事 1:1 精准还原为专业短剧剧本，要求画面描述详细，有 vo 的台词必须搭配画面，特写镜头要标注：\n\n{story}",
-                           key, model=text_model, max_tokens=8192, abort_check=lambda: _aborted(flow['flow_id']))
+    text = gen_script(story, key, model=text_model, abort_check=lambda: _aborted(flow['flow_id']))
     return {'text': text}
 
 
@@ -370,10 +403,8 @@ def _run_storyboard_node(flow, node):
     api_key = _resolve_api_key(flow)
     text_model = params.get('text_model', DEFAULT_TEXT_MODEL)
     key = get_vendor_api_key(text_model, fallback_key=api_key)
-    sb_text = call_text_model(storyboard_system_prompt(shot_dur),
-                              f"请将以下剧本改写为分镜脚本，每个分镜约{shot_dur}秒：\n\n{script}",
-                              key, model=text_model, max_tokens=16384, temperature=0.4,
-                              abort_check=lambda: _aborted(flow['flow_id']))
+    sb_text = gen_shotlist_text(script, shot_dur, key, model=text_model,
+                                abort_check=lambda: _aborted(flow['flow_id']))
     sb = parse_json_from_text(sb_text)
     shots = sb.get('shots', [])
     if not shots:
@@ -385,108 +416,17 @@ def _run_storyboard_node(flow, node):
     return {'shots': shots, 'warnings': warnings}
 
 
-def _match_assets(shot, assets):
-    """按角色/场景/道具名匹配镜头素材（与旧流水线逻辑一致）"""
-    matched, primary = [], None
-    shot_chars = [c.lower().strip() for c in shot.get('characters', [])]
-    scene_desc = shot.get('scene_desc', '').lower()
-    action = shot.get('action', '').lower()
-    for a in assets:
-        if not a.get('image_url'):
-            continue
-        name = a.get('name', '').lower().strip()
-        if not name:
-            continue
-        cat = a.get('category')
-        hit = (cat == 'characters' and any(name in c or c in name for c in shot_chars)) \
-            or (cat == 'scenes' and name in scene_desc) \
-            or (cat == 'props' and name in action)
-        if hit:
-            matched.append(a)
-            if not primary:
-                primary = a['image_url']
-    if not primary:
-        for a in assets:
-            if a.get('image_url') and a.get('category') == 'characters':
-                primary = a['image_url']
-                if a not in matched:
-                    matched.append(a)
-                break
-    return matched, primary
-
-
 def _generate_asset_image(flow, asset, idx, drama_id, params=None):
-    """生成单个素材参考图，返回 (image_url, local_file, img_prompt)"""
+    """生成单个素材参考图，返回 (image_url, local_file, img_prompt)。
+    实现下沉 services.asset_gen（与旧流水线同一份模板/重试/限流逻辑）"""
     params = params or flow['params']
-    category = asset.get('category', 'characters')
-    desc = asset.get('desc', '')
-    style = params.get('character_style', DEFAULT_CHARACTER_STYLE)
-    prompt_en = asset.get('prompt_en', '')
-    if prompt_en:
-        img_prompt = prompt_en
-        img_size = '1344x768' if category == 'scenes' else '768x1344'
-    elif category == 'characters':
-        img_prompt, img_size = build_character_image_prompt(desc, style)
-    elif category == 'scenes':
-        img_prompt = (f"{get_style_base('scene', style)}"
-                      f"16:9 horizontal composition, pure white background border. "
-                      f"Scene environment design concept art, multiple angles view. "
-                      f"Scene description: {desc}. Highly detailed environment, consistent style. "
-                      f"Absolutely no people anywhere. THE SPACE MUST BE IDENTICAL ACROSS ALL PANELS.")
-        img_size = '1344x768'
-    else:
-        img_prompt = (f"{get_style_base('prop', style)}"
-                      f"9:16 vertical composition, pure white minimalist background, premium prop design board layout. "
-                      f"Multiple views: front, side, back, top, detail close-ups. "
-                      f"Material and texture details clearly visible. Prop description: {desc}. "
-                      f"Consistent design, no deformation. Pure white background, no people, no hands anywhere in frame, "
-                      f"clear real-world scale reference.")
-        img_size = '768x1344'
-    img_prompt = sanitize_image_prompt(img_prompt)
-    image_model = params.get('image_model', DEFAULT_IMAGE_MODEL)
-    api_key = _resolve_api_key(flow)
+    img_prompt, img_size = build_asset_image_prompt(asset, params.get('character_style', DEFAULT_CHARACTER_STYLE))
     safe_name = (asset.get('name') or f'asset_{idx}').replace(' ', '_')
-    img_api_key = get_vendor_api_key(image_model, fallback_key=api_key)
-    img_base_url = get_vendor_base_url(image_model)
-    import requests
-    headers = {'Authorization': f'Bearer {img_api_key}', 'Content-Type': 'application/json'}
-    last_err = '未知错误'
-    for attempt in range(3):
-        try:
-            if is_gemini_image(image_model):
-                from ..config import get_custom_model_config
-                if not get_custom_model_config(image_model):
-                    url, local = generate_gemini_image(img_prompt, image_model,
-                                                       f'dramas/{drama_id}/images', safe_name)
-                    return url, local, img_prompt
-            resp = requests.post(f'{img_base_url}/images/generations', headers=headers,
-                                 json={'model': image_model, 'prompt': img_prompt, 'size': img_size},
-                                 timeout=180)
-            if resp.status_code == 200:
-                result = resp.json()
-                data = result.get('data') or []
-                if data and data[0].get('url'):
-                    image_url = data[0]['url']
-                    local = download_and_save_file(image_url, f'dramas/{drama_id}/images', safe_name, 'png')
-                    return image_url, local, img_prompt
-                last_err = f'响应无 url: {json.dumps(result, ensure_ascii=False)[:200]}'
-            elif resp.status_code in (429, 503, 433):
-                last_err = f'限流 {resp.status_code}'
-                for _ in range(15 * (attempt + 1)):
-                    if _aborted(flow['flow_id']):
-                        raise RuntimeError('已中止')
-                    time.sleep(1)
-                continue
-            else:
-                last_err = f'API {resp.status_code}: {resp.text[:200]}'
-        except RuntimeError:
-            raise
-        except Exception as e:
-            last_err = f'{type(e).__name__}: {e}'
-        if _aborted(flow['flow_id']):
-            raise RuntimeError('已中止')
-        time.sleep(3)
-    raise RuntimeError(f'素材 [{asset.get("name", idx)}] 生图失败: {last_err}')
+    image_url, local = request_asset_image(
+        params.get('image_model', DEFAULT_IMAGE_MODEL), img_prompt, img_size,
+        _resolve_api_key(flow), f'dramas/{drama_id}/images', safe_name,
+        abort_check=lambda: _aborted(flow['flow_id']))
+    return image_url, local, img_prompt
 
 
 def _run_assets_node(flow, node):
@@ -498,11 +438,8 @@ def _run_assets_node(flow, node):
     params = _node_params(flow, node)
     text_model = params.get('text_model', DEFAULT_TEXT_MODEL)
     key = get_vendor_api_key(text_model, fallback_key=api_key)
-    assets_text = call_text_model(assets_system_prompt(),
-                                  f"请从以下剧本和分镜中提取所有角色、场景、道具的视觉特征描述：\n"
-                                  f"剧本：\n{script}\n\n分镜：\n{json.dumps(sb, ensure_ascii=False)}",
-                                  key, model=text_model, max_tokens=16384,
-                                  abort_check=lambda: _aborted(flow['flow_id']))
+    assets_text = gen_asset_list(script, json.dumps(sb, ensure_ascii=False), key, model=text_model,
+                                 abort_check=lambda: _aborted(flow['flow_id']))
     raw = parse_json_from_text(assets_text)
     all_assets = []
     for cat in ('characters', 'scenes', 'props'):
@@ -530,12 +467,22 @@ def _run_assets_node(flow, node):
             time.sleep(2)
         with flow_lock:
             flow['nodes'][node['id']]['output'] = {'assets': all_assets, 'progress': f'{ok + len(failed)}/{len(all_assets)}'}
+        _bump(flow['flow_id'])
     if ok == 0:
         raise RuntimeError(f'全部 {len(all_assets)} 个素材生图失败')
     ref_warnings = _crosscheck_refs(sb, all_assets)
     if ref_warnings:
         print(f'[短剧流 {flow["flow_id"]}] 素材对账：{len(ref_warnings)} 个分镜角色在资产清单中找不到，镜头生成将回退默认角色参考')
     return {'assets': all_assets, 'failed': failed, 'ref_warnings': ref_warnings}
+
+
+def _shot_fp(shot, params, primary):
+    """单镜头复用指纹：分镜定义、最终时长档、视频模型、首参考图任一变化即不可复用。
+    入参解析必须与 _run_shot_video 实际提交生成时完全一致，否则复用判断失真"""
+    dur = _fit_shot_duration(shot, params.get('shot_duration', 5))
+    raw = json.dumps([shot, dur, params.get('video_model', DEFAULT_VIDEO_MODEL), primary or ''],
+                     sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 
 def _run_shot_video(flow, shot, drama_id, params=None):
@@ -608,18 +555,29 @@ def _run_shot_video(flow, shot, drama_id, params=None):
     return {'shot_index': shot_index, 'status': 'completed' if res['ok'] else 'failed',
             'local_file': res['local_file'], 'video_url': res['video_url'],
             'error': res['error'], 'prompt': prompt, 'prompt_cn': prompt_cn,
-            'primary_image': primary}
+            'primary_image': primary, 'fp': _shot_fp(shot, params, primary)}
 
 
 def _reuse_completed_shots(flow, node, shots, drama_id):
-    """已有 completed 且本地文件存在的镜头结果 → 直接复用，重跑不重复烧钱"""
+    """completed + 本地文件存在 + 输入指纹未变（分镜被改/模型时长升档/参考图变化）才复用；
+    否则重跑会把旧视频原样带走——静默的错误产出比烧钱更糟。旧数据无 fp：信任一次"""
     videos_dir = os.path.join(get_app_dir(), 'dramas', drama_id, 'videos')
+    params = _node_params(flow, node)
+    assets = flow.get('_shot_assets_cache') or []
+    by_idx = {s.get('shot_index'): s for s in shots}
     reused = {}
     for r in ((node.get('output') or {}).get('results') or []):
         si = r.get('shot_index')
-        if (r.get('status') == 'completed' and r.get('local_file')
+        s = by_idx.get(si)
+        if not (s and r.get('status') == 'completed' and r.get('local_file')
                 and os.path.exists(os.path.join(videos_dir, r['local_file']))):
-            reused[si] = r
+            continue
+        ci = ((flow.get('shot_overrides') or {}).get(str(si)) or {}).get('custom_images')
+        # ponytail: primary 选择逻辑与 _run_shot_video 的 custom_images 分支保持一致
+        primary = ci[0].get('image_url', '') if ci else _match_assets(s, assets)[1]
+        if r.get('fp') and r['fp'] != _shot_fp(s, params, primary):
+            continue
+        reused[si] = r
     return reused
 
 
@@ -644,10 +602,12 @@ def _run_shots_node(flow, node):
             snapshot = list(results.values())
         with flow_lock:
             flow['nodes'][node['id']]['output'] = {'results': snapshot}
+        _bump(flow['flow_id'])
 
     _update_output()
     params = _node_params(flow, node)
-    max_workers = int(params.get('shot_workers', 2))
+    # 视频接口硬限制同时只允许 1 个在途任务（与旧流水线一致）；chip 可临时调高赌一把
+    max_workers = int(params.get('shot_workers', 1))
     aborted = flow_stop_events.get(flow['flow_id'], threading.Event())
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futs = {pool.submit(_run_shot_video, flow, s, drama_id, params): s for s in todo_shots}
@@ -659,6 +619,7 @@ def _run_shots_node(flow, node):
                 r = {'shot_index': si, 'status': 'failed', 'error': str(e)[:200]}
             results[si] = r
             _update_output()
+            print(f'[短剧流 {flow["flow_id"]}] 镜头 {si} -> {r.get("status")}' + (f'（{(r.get("error") or "")[:120]}）' if r.get('status') != 'completed' else ''))
             if aborted.is_set():
                 for f2 in futs.values():
                     f2.cancel()
@@ -779,7 +740,7 @@ def flow_create():
         'image_model': data.get('image_model', DEFAULT_IMAGE_MODEL),
         'video_model': data.get('video_model', DEFAULT_VIDEO_MODEL),
         'character_style': data.get('character_style', DEFAULT_CHARACTER_STYLE),
-        'shot_workers': data.get('shot_workers', 2),
+        'shot_workers': data.get('shot_workers', 1),
         'merge_order': data.get('merge_order'),
     }
     nodes, edges = default_graph()
@@ -844,8 +805,31 @@ def flow_get(flow_id):
     flow = _load_flow(flow_id)
     if not flow:
         return jsonify({'success': False, 'error': '流不存在'}), 404
-    pub = {k: v for k, v in flow.items() if not k.startswith('_')}
-    return jsonify({'success': True, 'flow': pub})
+    return jsonify({'success': True, 'flow': _public_flow(flow)})
+
+
+@flow_bp.route('/api/drama/flow/<flow_id>/events')
+def flow_events(flow_id):
+    """SSE：flow 任何落盘/内存变更即时推送最新快照（替代前端 5 秒轮询）。
+    连接期间：有变更立刻一帧，无变更 15 秒一次心跳注释保活"""
+    flow = _load_flow(flow_id)
+    if not flow:
+        return jsonify({'success': False, 'error': '流不存在'}), 404
+
+    def gen():
+        last = -1
+        while not shutdown_event.is_set():
+            with flow_cv:
+                if flow_version.get(flow_id, 0) == last:
+                    flow_cv.wait(timeout=15)
+                v = flow_version.get(flow_id, 0)
+            if v != last:
+                last = v
+                yield 'data: ' + json.dumps(_public_flow(flow), ensure_ascii=False, default=str) + '\n\n'
+            else:
+                yield ': ping\n\n'
+    return Response(gen(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
 @flow_bp.route('/api/drama/flow/<flow_id>/graph', methods=['POST'])
@@ -855,6 +839,8 @@ def flow_save_graph(flow_id):
     if not flow:
         return jsonify({'success': False, 'error': '流不存在'}), 404
     data = request.get_json(silent=True) or {}
+    new_params = data.get('params') or {}
+    prompt_changed = 'prompt' in new_params and new_params['prompt'] != flow['params'].get('prompt')
     with flow_lock:
         if 'nodes' in data:
             merged = {}
@@ -875,6 +861,8 @@ def flow_save_graph(flow_id):
         if 'name' in data:
             flow['name'] = data['name']
     _persist(flow_id)
+    if prompt_changed:
+        _invalidate_prompt_nodes(flow_id)
     return jsonify({'success': True})
 
 
@@ -1108,6 +1096,7 @@ def flow_shot_run(flow_id):
         results = sh_node.setdefault('output', {'results': []})['results']
         results[:] = [r for r in results if r.get('shot_index') != shot_index]
         results.append({'shot_index': shot_index, 'status': 'generating'})
+    _bump(flow_id)
 
     _, assets_node = _assets_node_of(flow)
     flow['_shot_assets_cache'] = assets_node['output']['assets'] if assets_node else []
@@ -1225,11 +1214,22 @@ def flow_merge(flow_id):
                           output_prefix=f'merge_{merge_name}')
     if not merged:
         return jsonify({'success': False, 'error': '合并失败，请检查 ffmpeg 与日志'}), 500
+    # 勾选覆盖全部已完成镜头 + 指定了 merge 节点 → 手动合并即视为流水线收口，
+    # 否则节点永远 pending，「运行未完成节点」还会把同样的片子再烧一遍 ffmpeg
+    node_id = data.get('node_id')
+    pipeline_done = False
     with flow_lock:
         flow.setdefault('custom_merges', []).append(
             {'name': merge_name, 'shot_indices': valid, 'merged_file': merged, 'at': time.time()})
+        mn = flow['nodes'].get(node_id)
+        if mn and mn.get('type') == 'merge' and set(valid) == completed:
+            flow['merged_video'] = merged
+            mn.update({'status': 'completed', 'output': {'merged_file': merged},
+                       'error': '', 'updated_at': time.time(), 'sig': _node_sig(flow, node_id)})
+            pipeline_done = True
     _persist(flow_id)
-    return jsonify({'success': True, 'merged_file': merged, 'shot_indices': valid})
+    return jsonify({'success': True, 'merged_file': merged, 'shot_indices': valid,
+                    'pipeline_completed': pipeline_done})
 
 
 @flow_bp.route('/api/drama/flow/<flow_id>/reset', methods=['POST'])

@@ -4,6 +4,7 @@
 """
 
 import json
+import re
 import time
 import requests
 from ..config import get_text_base_url, get_vendor_base_url
@@ -68,6 +69,9 @@ def call_text_model(system_prompt, user_prompt, api_key, model=None, max_tokens=
             if resp.status_code == 200:
                 result = resp.json()
                 content = result['choices'][0]['message']['content']
+                if not (content or '').strip():
+                    # 免费路由/内容过滤时常回 200+空文本，静默下去各调用方表现成「失败但无报错」
+                    raise Exception("文本模型返回空内容，请更换模型重试")
                 return content
             elif resp.status_code in (429, 502, 503, 504, 433) and 'model_not_found' not in resp.text and attempt < max_retries:
                 # TPM 限额通常在下一个分钟窗口恢复，优先使用服务端的等待建议。
@@ -420,27 +424,27 @@ _CONTENT_POLICY_WORDS = [
 ]
 
 
-def sanitize_video_prompt(prompt):
-    """清洗视频 prompt，移除可能触发内容安全策略的关键词"""
-    prompt_lower = prompt.lower()
+def _sanitize_policy(prompt):
+    r"""移除内容安全关键词：英文按词边界（否则 'blood' 会把 'blood-red' 打成 '-red'、
+    'war' 把 'warm' 打成 'm'），中文直接替换（\b 对 CJK 无效）"""
     cleaned = prompt
     for word in _CONTENT_POLICY_WORDS:
-        if word.lower() in prompt_lower:
-            cleaned = cleaned.replace(word, '').replace(word.lower(), '').replace(word.title(), '')
-    cleaned = ' '.join(cleaned.split())
-    return cleaned
+        if word.isascii():
+            cleaned = re.sub(rf'\b{re.escape(word)}\b', '', cleaned, flags=re.IGNORECASE)
+        else:
+            cleaned = cleaned.replace(word, '')
+    cleaned = re.sub(r'(?<!\S)-|-(?=[\s,.])', '', cleaned)  # 删词后的孤立连字符
+    return ' '.join(cleaned.split())
+
+
+def sanitize_video_prompt(prompt):
+    """清洗视频 prompt，移除可能触发内容安全策略的关键词"""
+    return _sanitize_policy(prompt)
 
 
 def sanitize_image_prompt(prompt):
     """清洗图片 prompt，移除可能触发内容安全策略的关键词"""
-    prompt_lower = prompt.lower()
-    cleaned = prompt
-    for word in _CONTENT_POLICY_WORDS:
-        if word.lower() in prompt_lower:
-            cleaned = cleaned.replace(word, '').replace(word.lower(), '').replace(word.title(), '')
-    # 清理多余空格
-    cleaned = ' '.join(cleaned.split())
-    return cleaned
+    return _sanitize_policy(prompt)
 
 
 # 景别/运镜中文词 → 英文短语（借鉴 shuohao size-phrase/camera-phrase：词必须进提示词，不赌模型自选）
@@ -470,16 +474,17 @@ def build_video_prompt(shot, shot_assets):
     if cam_en:
         base_prompt = f"{base_prompt}. Shot framing and camera movement: {cam_en}."
     
-    # 【重要】禁止视频模型生成任何文字/字幕，中文字幕由 ffmpeg 后期烧录
-    en_prompt = "No text, no subtitles, no captions, no labels, no written words, no letters, no signs, no watermarks, no typography, no writing of any kind should appear anywhere in the video. Pure cinematic scene only. "
-    
-    # 【角色一致性】在提示词开头强调必须严格匹配参考图
+    # 场景描述放最前：flash 级模型对开头 token 权重最高，模板前置会稀释剧情
+    en_prompt = f"{base_prompt} "
+
+    # 【角色一致性】紧跟场景之后强调必须严格匹配参考图
     if shot_assets:
         char_names = [a.get('name', '') for a in shot_assets if a.get('category') == 'characters']
         if char_names:
             en_prompt += f"STRICT CHARACTER CONSISTENCY REQUIRED: All characters ({', '.join(char_names)}) MUST appear exactly as shown in the reference images. Their facial features, hairstyle, hair color, skin tone, body proportions, clothing style and colors must match the reference images PRECISELY. Do NOT redesign, reinterpret, or alter any character's appearance in any way. "
-    
-    en_prompt += base_prompt
+
+    # 【重要】禁止视频模型生成任何文字/字幕，中文字幕由 ffmpeg 后期烧录
+    en_prompt += "No text, no subtitles, no captions, no labels, no written words, no letters, no signs, no watermarks, no typography, no writing of any kind should appear anywhere in the video. Pure cinematic scene only."
     
     # 中文提示词（供前端展示）
     cn_prompt = scene_desc_cn or base_prompt
@@ -547,8 +552,8 @@ def is_mostly_chinese(text):
     return chinese_chars > len(text) * 0.3
 
 
-def translate_cn_to_en(text, api_key, model=None):
-    """将中文提示词翻译为英文（用于发送给视频模型）"""
+def translate_cn_to_en(text, api_key, model=None, system=None):
+    """将中文提示词翻译为英文（用于发送给视频/图像模型）；system 可换成改写规范"""
     if not text or not is_mostly_chinese(text):
         return text  # 已经是英文，直接返回
     try:
@@ -564,7 +569,7 @@ def translate_cn_to_en(text, api_key, model=None):
         payload = {
             'model': model,
             'messages': [
-                {'role': 'system', 'content': 'You are a professional translator. Translate the following Chinese video scene description into English. Keep it vivid and cinematic. Output ONLY the English translation, nothing else.'},
+                {'role': 'system', 'content': system or 'You are a professional translator. Translate the following Chinese video scene description into English. Keep it vivid and cinematic. Output ONLY the English translation, nothing else.'},
                 {'role': 'user', 'content': text}
             ],
             'max_tokens': 1024,
@@ -581,3 +586,37 @@ def translate_cn_to_en(text, api_key, model=None):
     except Exception as e:
         print(f"[翻译] 翻译失败，使用原文: {e}")
     return text
+
+
+# ==================== 短剧流水线高层步骤 ====================
+# 一键短剧（routes/drama.py）与节点流（routes/drama_flow.py）共用的唯一 prompt 定义。
+# 以前两处各抄一份，改措辞要同步两个文件——现在只改这里。
+
+def gen_story(src, api_key, model=None, abort_check=None):
+    """①a 描述 → 故事梗概文本"""
+    return call_text_model(story_system_prompt(),
+                           f"请根据以下描述，创作一个 300～500 字的短剧故事：\n{src}",
+                           api_key, model=model, abort_check=abort_check)
+
+
+def gen_script(story, api_key, model=None, abort_check=None):
+    """①b 故事 → 专业剧本"""
+    return call_text_model(script_system_prompt(),
+                           f"请将以下故事 1:1 精准还原为专业短剧剧本，要求画面描述详细，有 vo 的台词必须搭配画面，特写镜头要标注：\n\n{story}",
+                           api_key, model=model, max_tokens=8192, abort_check=abort_check)
+
+
+def gen_shotlist_text(script, shot_dur, api_key, model=None, abort_check=None):
+    """② 剧本 → 分镜脚本文本（JSON 解析由调用方 parse_json_from_text）"""
+    return call_text_model(storyboard_system_prompt(shot_dur),
+                           f"请将以下剧本改写为分镜脚本，每个分镜约{shot_dur}秒：\n\n{script}",
+                           api_key, model=model, max_tokens=16384, temperature=0.4,
+                           abort_check=abort_check)
+
+
+def gen_asset_list(script, shots_json, api_key, model=None, abort_check=None):
+    """③ 剧本+分镜 → 素材清单文本（JSON 解析由调用方 parse_json_from_text）"""
+    return call_text_model(assets_system_prompt(),
+                           f"请从以下剧本和分镜中提取所有角色、场景、道具的视觉特征描述：\n"
+                           f"剧本：\n{script}\n\n分镜：\n{shots_json}",
+                           api_key, model=model, max_tokens=16384, abort_check=abort_check)

@@ -258,6 +258,14 @@ body {
   gap: 8px;
   margin-top: 10px;
 }
+.composer-footer-left {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1; min-width: 0; flex-wrap: wrap;
+}
+.composer-footer-right {
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
 .attach-btn {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 5px 12px;
@@ -275,8 +283,8 @@ body {
   width: 32px; height: 32px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface2);
+  border: 1px solid transparent;
+  background: transparent;
   font-size: 15px;
   cursor: pointer;
   transition: all var(--transition);
@@ -304,7 +312,6 @@ body {
 }
 .composer-size:focus { outline: none; border-color: var(--accent); }
 .send-btn {
-  margin-left: auto;
   width: 34px; height: 34px;
   border-radius: 50%;
   border: none;
@@ -361,7 +368,7 @@ body {
 
 /* ===== 节点流画布（n8n 风格） ===== */
 .flow-node {
-  position: relative; width: 230px; background: var(--surface);
+  position: relative; width: 360px; background: var(--surface);
   border: 1px solid var(--border); border-radius: 12px;
   box-shadow: 0 1px 4px rgba(16, 24, 40, .07); overflow: hidden;
   transition: box-shadow .15s, border-color .15s;
@@ -387,7 +394,37 @@ body {
 .flow-node-err { color: var(--error); font-size: 10px; margin-top: 4px; max-height: 28px; overflow: hidden; word-break: break-all; }
 .flow-node-sum { color: var(--text2); font-size: 11px; margin-top: 3px; max-height: 40px; overflow: hidden; white-space: pre-wrap; }
 .flow-node-thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 7px; }
-.flow-node-thumbs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+.flow-node-thumbs img, .flow-node-thumbs video { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); cursor: zoom-in; background: #000; }
+/* 卡片即编辑器：文本类节点就地编辑区 */
+.flow-node-text {
+  margin-top: 6px; font-size: 11px; line-height: 1.55; color: var(--text2);
+  max-height: 92px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 7px; cursor: text;
+}
+.flow-mini-btn {
+  font-size: 11px; border: 1px solid var(--border); background: var(--surface2);
+  color: var(--text); border-radius: 5px; padding: 2px 10px; cursor: pointer;
+}
+.flow-mini-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* 选中节点浮动操作条（NodeToolbar） */
+.flow-toolbar {
+  display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 9px; padding: 4px; box-shadow: 0 6px 18px rgba(16, 24, 40, .16);
+}
+.flow-toolbar button {
+  font-size: 11px; border: none; background: var(--surface2); color: var(--text);
+  border-radius: 6px; padding: 3px 9px; cursor: pointer; white-space: nowrap;
+}
+.flow-toolbar button:hover { background: var(--accent); color: #fff; }
+.flow-toolbar button.danger:hover { background: var(--error); }
+/* 图片/视频灯箱 */
+.lightbox {
+  position: fixed; inset: 0; z-index: 999; background: rgba(8, 10, 18, .82);
+  display: flex; align-items: center; justify-content: center; cursor: zoom-out;
+}
+.lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 8px; cursor: default; }
+.lightbox video { max-width: 92vw; max-height: 92vh; border-radius: 8px; cursor: default; background: #000; }
 
 .react-flow__handle {
   width: 8px; height: 8px; background: var(--surface);
@@ -417,4 +454,9 @@ body {
 .flow-chip-select {
   font-size: 10px; border: 1px solid var(--accent); border-radius: 4px;
   background: var(--surface); color: var(--text); padding: 1px 3px; max-width: 130px;
+}
+.translate-toggle { cursor: pointer; }
+.translate-toggle.on {
+  border-color: var(--accent); color: var(--accent);
+  background: rgba(99, 102, 241, 0.08);
 }

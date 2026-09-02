@@ -11,6 +11,32 @@ from flask import Blueprint, request, jsonify
 
 from ..config import get_vendor_api_key, get_vendor_base_url, get_custom_model_config, resolve_image_url, ensure_output_dirs, get_config_path
 from ..services.gemini_image import is_gemini_image, generate_gemini_image
+from ..services.text_model import translate_cn_to_en, is_mostly_chinese
+from ..models import DEFAULT_TEXT_MODEL
+
+
+# 中文→英文不是直译：原描述常自相矛盾（"照片风格"+"拟人化Q版角色"），
+# 直译会把矛盾原样带过去，模型按写实先验执行就出真动物照片。这里做意图改写。
+_IMAGE_REWRITE_SYSTEM = (
+    "You are an expert AI image prompt engineer. Convert the user's Chinese description into ONE English prompt "
+    "ready for a text-to-image model. Rules: "
+    "1) Preserve every intent and detail of the original. "
+    "2) Detect the IMPLIED style and state it explicitly: anthropomorphic/cartoon/Q-version characters mean stylized "
+    "rendering (e.g. '3D render, Pixar style, plush fur texture, anthropomorphic character'), NOT a real photo; "
+    "only keep photorealism when the subject is genuinely real. "
+    "3) Resolve contradictions in favor of the subject's nature (an anthropomorphic grumpy bunny is a character, "
+    "even if the text says 'photo'); rewrite misleading words like 照片/photorealistic accordingly (e.g. 'cinematic shot of the character'). "
+    "4) Structure: [subject + appearance] + [expression/action/position] + [scene] + [style] + [lighting] + [composition] + [quality words]. "
+    "Output ONLY the prompt itself, no explanation or quotes."
+)
+
+
+def _maybe_translate(prompt, data):
+    """中文提示词自动改写为英文图像提示词，translate_prompt=false 可关；失败回退原文"""
+    if data.get('translate_prompt', True) and is_mostly_chinese(prompt):
+        return translate_cn_to_en(prompt, get_vendor_api_key(DEFAULT_TEXT_MODEL), DEFAULT_TEXT_MODEL,
+                                  system=_IMAGE_REWRITE_SYSTEM)
+    return prompt
 from ..services.video_gen import download_and_save_file
 from ..services.text_model import call_text_model
 from ..models import DEFAULT_TEXT_MODEL
@@ -43,6 +69,7 @@ def enhance_prompt():
         'image': '你是一位专业的 AI 图像提示词优化师。请将用户输入的简短描述扩写为一段高质量、结构化的英文提示词，结构为：[主体] + [场景/背景] + [风格] + [光照] + [构图] + [画质要求]。只输出扩写后的提示词本身，不要任何解释、引号或前缀。',
         'img2img': '你是一位专业的 AI 图像编辑提示词优化师。用户提供参考图并描述想要做的修改，请将输入扩写为高质量、结构化的英文编辑提示词，按照以下结构组织：[需要改变的要求] + [新的风格/场景] + [需要添加或移除的元素] + [需要保留的元素]（主体、构图、人物表情/姿态等）。只输出编辑提示词本身，不要任何解释、引号或前缀。',
         'video': 'You are an expert AI video prompt optimizer. Expand the user\'s brief description into a detailed, cinematic English video prompt covering: subject, setting, camera movement, lighting, mood, and quality. Output only the optimized prompt itself, with no explanations, quotes, or prefixes.',
+        'story': '你是资深短剧策划。请把用户的一句话点子扩写为一段具体、有画面感的中文短剧描述：包含主要角色及其目标、核心冲突与转折、场景与时代氛围、整体视觉风格。保持用户原意，不要发明与点子无关的设定。只输出描述本身，不要任何解释、标题或引号。',
     }
 
     try:
@@ -80,6 +107,7 @@ def generate_image():
         api_key = get_vendor_api_key(model)
         if not api_key:
             return jsonify({'success': False, 'error': '请先配置 API Key'}), 401
+        prompt = _maybe_translate(prompt, data)
         base_url = get_vendor_base_url(model)
 
         headers = {
@@ -157,8 +185,10 @@ def img2img():
                 'success': True,
                 'image_url': relative_url,
                 'local_file': local_filename,
-                'raw_response': {'note': 'gemini-image-img2img', 'model': model}
+                'raw_response': {'note': 'gemini-image-edit', 'model': model}
             })
+
+        prompt = _maybe_translate(prompt, data)
 
         api_key = get_vendor_api_key(model)
         if not api_key:

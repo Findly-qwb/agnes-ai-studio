@@ -65,8 +65,8 @@ export function HomePage() {
         return
       }
       const data = cfg.mode === 'image'
-        ? await api.generateImage({ prompt: cfg.prompt, size: cfg.size, ratio: cfg.ratio, model: cfg.model })
-        : await api.img2img({ prompt: cfg.prompt, image_url: cfg.imageUrl!, size: cfg.size, ratio: cfg.ratio, model: cfg.model })
+        ? await api.generateImage({ prompt: cfg.prompt, size: cfg.size, ratio: cfg.ratio, model: cfg.model, translate_prompt: cfg.translatePrompt })
+        : await api.img2img({ prompt: cfg.prompt, image_url: cfg.imageUrl!, size: cfg.size, ratio: cfg.ratio, model: cfg.model, translate_prompt: cfg.translatePrompt })
       setResult({ kind: 'image', url: data.image_url, data })
       toast.show('生成成功！', 'success')
     } catch (e: any) {
